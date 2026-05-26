@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>POS Fonocopete · Sistema limpio v9.1 Firebase</title>
+<title>POS Fonocopete - Produccion Firebase</title>
 <style>
 :root{--bg:#f8fafc;--card:#fff;--text:#0f172a;--muted:#64748b;--orange:#f97316;--orange2:#fb923c;--border:#e5e7eb;--green:#16a34a;--red:#dc2626;--dark:#0f172a}
 *{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
@@ -54,7 +54,7 @@ input,select,button{font:inherit}label{display:block;font-size:12px;color:var(--
   <main class="main">
     <div class="top">
       <div>
-        <h1 style="margin-bottom:6px">POS Fonocopete · Sistema limpio v9.1 Firebase</h1>
+        <h1 style="margin-bottom:6px">POS Fonocopete - Produccion Firebase</h1>
         <div class="muted" id="topBranch"></div>
       </div>
       <button class="btn btn-secondary" onclick="logout()">Salir</button>
@@ -84,7 +84,7 @@ input,select,button{font:inherit}label{display:block;font-size:12px;color:var(--
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -108,6 +108,7 @@ window.FONO_FIREBASE = {
   getDocs,
   deleteDoc,
   serverTimestamp,
+  writeBatch,
   ready: true
 };
 
@@ -116,7 +117,8 @@ console.log('Firebase conectado: POS Fonocopete');
 </script>
 
 <script>
-const STORAGE_KEY='fonocopete_clean_app_v91_firebase';
+const ZERO_TEST_MODE=false;
+const STORAGE_KEY='fonocopete_clean_app_v91_firebase_produccion';
 const BASE_PRODUCTS=[{id:'beer_silver',name:'Silver',category:'Cervezas',salePrice:7000,type:'simple',active:true,trackStock:true},
     {id:'beer_cristal',name:'Cristal',category:'Cervezas',salePrice:8000,type:'simple',active:true,trackStock:true},
     {id:'beer_royal',name:'Royal',category:'Cervezas',salePrice:9000,type:'simple',active:true,trackStock:true},
@@ -264,10 +266,10 @@ const BASE_USERS=[
 const state={
   currentUser:null,view:'dashboard',
   activeDate:todayDMY(),selectedHistoryDate:todayDMY(),selectedCourierDate:todayDMY(),selectedMonth:monthKey(todayDMY()),dashboardPeriod:'dia',
-  selectedBranchId:'conce',turnOpen:true,category:'Piscos',query:'',
-  cart:[],editSaleId:null,invoiceDraft:[],editInvoiceId:null,paymentMode:'efectivo',mixEf:0,mixTr:0,mixTb:0,selectedCourierId:'',fuelExpense:'',branchTemp:{},
+  selectedBranchId:'conce',turnOpen:true,category:'Piscos',query:'',invCategory:'Piscos',invQuery:'',facCategory:'Piscos',facQuery:'',prodCategory:'Piscos',prodQuery:'',selectedLibroCourierId:'',
+  cart:[],editSaleId:null,invoiceDraft:[],editInvoiceId:null,invoiceType:'reposicion',paymentMode:'efectivo',mixEf:0,mixTr:0,mixTb:0,selectedCourierId:'',fuelExpense:'',branchTemp:{},
   branches:BRANCHES,users:BASE_USERS,categories:BASE_CATEGORIES,products:normalizeProducts(BASE_PRODUCTS),
-  inventory:[],sales:[],invoices:[],closures:[],
+  inventory:[],sales:[],invoices:[],closures:[],capitalResets:[],
   couriers:[
     {id:'rep_nicolas',name:'Nicolás López',branchId:'conce',active:true},
     {id:'rep_leonardo',name:'Leonardo',branchId:'conce',active:true},
@@ -305,7 +307,7 @@ async function waitFirebaseReady(){
   });
 }
 function canUseFirebase(){
-  return !!(window.FONO_FIREBASE && window.FONO_FIREBASE.ready);
+  return !ZERO_TEST_MODE && !!(window.FONO_FIREBASE && window.FONO_FIREBASE.ready);
 }
 async function cloudSaveConfig(){
   if(!canUseFirebase()) return;
@@ -388,6 +390,14 @@ async function cloudSaveClosure(closure){
     updatedAt:f.serverTimestamp()
   });
 }
+async function cloudSaveCapitalReset(reset){
+  if(!canUseFirebase() || !reset) return;
+  const f=window.FONO_FIREBASE;
+  await f.setDoc(f.doc(f.db,'capitalResets',reset.id),{
+    ...reset,
+    updatedAt:f.serverTimestamp()
+  });
+}
 async function cloudLoadCollection(name){
   if(!canUseFirebase()) return [];
   const f=window.FONO_FIREBASE;
@@ -397,6 +407,37 @@ async function cloudLoadCollection(name){
   return rows;
 }
 async function cloudLoadAll(){
+  if(ZERO_TEST_MODE){
+    state.activeDate=todayDMY();
+    state.selectedHistoryDate=state.activeDate;
+    state.selectedCourierDate=state.activeDate;
+    state.selectedMonth=monthKey(state.activeDate);
+    state.inventory=[];
+    state.sales=[];
+    state.invoices=[];
+    state.closures=[];
+    state.capitalResets=[];
+    state.cart=[];
+    state.invoiceDraft=[];
+    state.editSaleId=null;
+    state.editInvoiceId=null;
+    state.invoiceProvider='';
+    state.invoiceType='reposicion';
+    state.facCategory='Piscos';
+    state.facQuery='';
+    state.prodCategory='Piscos';
+    state.prodQuery='';
+    state.couriers=[];
+    state.selectedCourierId='';
+    state.paymentMode='efectivo';
+    state.mixEf=0;
+    state.mixTr=0;
+    state.mixTb=0;
+    seedInventory();
+    saveLocal();
+    toast('Modo prueba: todo en cero');
+    return;
+  }
   const ok=await waitFirebaseReady();
   if(!ok){
     toast('Firebase no cargó. Usando respaldo local.');
@@ -406,14 +447,16 @@ async function cloudLoadAll(){
     await cloudLoadConfig();
     seedInventory();
     await cloudLoadInventory();
-    const [sales,invoices,closures]=await Promise.all([
+    const [sales,invoices,closures,capitalResets]=await Promise.all([
       cloudLoadCollection('sales'),
       cloudLoadCollection('invoices'),
-      cloudLoadCollection('closures')
+      cloudLoadCollection('closures'),
+      cloudLoadCollection('capitalResets')
     ]);
     state.sales=Array.isArray(sales)?sales:[];
     state.invoices=Array.isArray(invoices)?invoices:[];
     state.closures=Array.isArray(closures)?closures:[];
+    state.capitalResets=Array.isArray(capitalResets)?capitalResets:[];
     seedInventory();
     saveLocal();
     toast('Datos cargados desde Firebase');
@@ -430,7 +473,8 @@ async function cloudBackupAll(){
     await Promise.all([
       ...(state.sales||[]).map(s=>cloudSaveSale(s)),
       ...(state.invoices||[]).map(i=>cloudSaveInvoice(i)),
-      ...(state.closures||[]).map(c=>cloudSaveClosure(c))
+      ...(state.closures||[]).map(c=>cloudSaveClosure(c)),
+      ...(state.capitalResets||[]).map(r=>cloudSaveCapitalReset(r))
     ]);
   }catch(e){
     console.error('Error backup Firebase',e);
@@ -452,8 +496,13 @@ function loadLocal(){
   if(!Array.isArray(state.sales))state.sales=[];
   if(!Array.isArray(state.invoices))state.invoices=[];
   if(!Array.isArray(state.closures))state.closures=[];
+  if(!Array.isArray(state.capitalResets))state.capitalResets=[];
   if(!Array.isArray(state.inventory))state.inventory=[];
   if(!state.branchTemp) state.branchTemp={};
+  state.activeDate=todayDMY();
+  state.selectedHistoryDate=state.activeDate;
+  state.selectedCourierDate=state.activeDate;
+  state.selectedMonth=monthKey(state.activeDate);
   seedInventory();
 }
 function saveLocal(){
@@ -497,6 +546,7 @@ function isAdmin(){return state.currentUser&&state.currentUser.role==='admin'}
 function isOperator(){return state.currentUser&&state.currentUser.role==='operador'}
 function canSell(){return isAdmin()||isOperator()}
 function canManage(){return isAdmin()}
+function canEditDailyOrders(){return isAdmin()||isOperator()}
 function canSeeFinancial(){return isOwner()||isAdmin()}
 function visible(view){
   if(isOwner())return ['dashboard','libro','mayor','capital','facturas','repartidores','inventario','productos','usuarios','turno','admin'].includes(view);
@@ -515,15 +565,42 @@ function monthInvoices(mk=state.selectedMonth,bid=branchId()){return state.invoi
 function monthClosures(mk=state.selectedMonth,bid=branchId()){return state.closures.filter(c=>(bid==='all'||c.branchId===bid)&&monthKey(c.date)===mk)}
 function inventoryValue(bid=branchId()){return state.inventory.filter(r=>bid==='all'||r.branchId===bid).reduce((a,r)=>a+Number(r.stock||0)*Number(r.cost||0),0)}
 function periodPayments(list){return list.reduce((a,s)=>{a.efectivo+=Number(s.payments?.efectivo||0);a.transferencia+=Number(s.payments?.transferencia||0);a.transbank+=Number(s.payments?.transbank||0);return a},{efectivo:0,transferencia:0,transbank:0})}
+function paymentText(s){const p=s.payments||{},parts=[];if(Number(p.efectivo||0)>0)parts.push(`Efectivo ${clp(p.efectivo)}`);if(Number(p.transferencia||0)>0)parts.push(`Transferencia ${clp(p.transferencia)}`);if(Number(p.transbank||0)>0)parts.push(`Transbank ${clp(p.transbank)}`);return parts.join(' · ')||String(s.paymentMode||'Sin pago')}
 function saleCost(s){return (s.items||[]).reduce((sum,item)=>sum+(item.components||[]).reduce((a,c)=>a+Number(c.costAtSale||0)*Number(c.qty||0),0)*Number(item.qty||1),0)}
 function saleProfit(s){return Number(s.total||0)-saleCost(s)}
 function summary(list){return list.reduce((a,s)=>{a.sales+=Number(s.total||0);a.cost+=saleCost(s);a.profit+=saleProfit(s);a.orders++;a.ef+=Number(s.payments?.efectivo||0);a.tr+=Number(s.payments?.transferencia||0);a.tb+=Number(s.payments?.transbank||0);return a},{sales:0,cost:0,profit:0,orders:0,ef:0,tr:0,tb:0})}
+function invoiceTypeValue(v){return v==='capitalInicial'?'capitalInicial':'reposicion'}
+function invoiceTypeLabel(v){return invoiceTypeValue(v)==='capitalInicial'?'Capital inicial':'Reposicion'}
+function lastCapitalReset(bid=branchId()){
+  return (state.capitalResets||[]).filter(r=>r.branchId===bid).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0))[0]||null;
+}
+function afterCapitalReset(rows,bid=branchId()){
+  if(bid==='all'){
+    return (rows||[]).filter(r=>Number(r.createdAt||0)>Number(lastCapitalReset(r.branchId)?.createdAt||0));
+  }
+  const reset=lastCapitalReset(bid);
+  const cutoff=Number(reset?.createdAt||0);
+  if(!cutoff)return rows||[];
+  return (rows||[]).filter(r=>Number(r.createdAt||0)>cutoff);
+}
+function capitalInvoicesForMonth(mk=state.selectedMonth,bid=branchId()){
+  return afterCapitalReset(monthInvoices(mk,bid),bid);
+}
+function invoiceSelectableProduct(p){return p&&p.type==='simple'&&p.trackStock!==false}
+function selectInvoiceProduct(pid){
+  const p=product(pid);
+  if(!p)return;
+  if(!invoiceSelectableProduct(p))return alert('Este producto es una promo/combo. Para facturar stock ingresa sus componentes reales: producto base, bebida y hielo.');
+  const el=document.getElementById('facProd');
+  if(el)el.value=pid;
+}
+function replenishmentInvoices(mk=state.selectedMonth,bid=branchId()){return capitalInvoicesForMonth(mk,bid).filter(i=>invoiceTypeValue(i.type)==='reposicion')}
 function expectedCashForMonth(mk=state.selectedMonth,bid=branchId()){const list=monthSales(mk,bid),pay=periodPayments(list),inv=monthInvoices(mk,bid).reduce((a,i)=>a+Number(i.total||0),0),fuel=monthClosures(mk,bid).reduce((a,c)=>a+Number(c.fuelExpense||0),0);return Math.max(0,pay.efectivo+pay.transferencia+pay.transbank-inv-fuel)}
-function pendingCapitalForMonth(mk=state.selectedMonth,bid=branchId()){const cost=monthSales(mk,bid).reduce((a,s)=>a+saleCost(s),0),inv=monthInvoices(mk,bid).reduce((a,i)=>a+Number(i.total||0),0);return Math.max(0,cost-inv)}
+function pendingCapitalForMonth(mk=state.selectedMonth,bid=branchId()){const cost=afterCapitalReset(monthSales(mk,bid),bid).reduce((a,s)=>a+saleCost(s),0),inv=capitalInvoicesForMonth(mk,bid).reduce((a,i)=>a+Number(i.total||0),0);return Math.max(0,cost-inv)}
 function costMoneyInCaja(mk=state.selectedMonth,bid=branchId()){
-  // Dinero de costo recuperado por ventas. Esto NO resta facturas,
-  // porque las facturas son inventario comprado y se reflejan en bodega.
-  return monthSales(mk,bid).reduce((a,s)=>a+saleCost(s),0);
+  const soldCost=afterCapitalReset(monthSales(mk,bid),bid).reduce((a,s)=>a+saleCost(s),0);
+  const replenishmentCost=replenishmentInvoices(mk,bid).reduce((a,i)=>a+Number(i.total||0),0);
+  return Math.max(0,soldCost-replenishmentCost);
 }
 function controlledCapitalTotal(mk=state.selectedMonth,bid=branchId()){
   return inventoryValue(bid) + costMoneyInCaja(mk,bid);
@@ -615,6 +692,20 @@ function renderVenta(){
 }
 function removeCart(id){state.cart=state.cart.filter(i=>i.id!==id);renderVenta()}
 function cancelCart(){state.cart=[];state.editSaleId=null;renderVenta()}
+renderVenta=function(){
+  if(!canSell()){
+    document.getElementById('view-venta').innerHTML='<div class="card"><h3>Venta rapida</h3><div class="muted">Usuario solo lectura.</div></div>';
+    return;
+  }
+  const prods=activeProducts().filter(p=>p.category===state.category&&(!state.query||p.name.toLowerCase().includes(state.query.toLowerCase())));
+  const mixed=state.paymentMode==='mixto'?`<div class="grid3" style="margin-top:8px"><div><label>Efectivo</label><input class="input" type="number" value="${state.mixEf}" oninput="state.mixEf=Number(this.value||0)"></div><div><label>Transferencia</label><input class="input" type="number" value="${state.mixTr}" oninput="state.mixTr=Number(this.value||0)"></div><div><label>Transbank</label><input class="input" type="number" value="${state.mixTb}" oninput="state.mixTb=Number(this.value||0)"></div></div>`:'';
+  document.getElementById('view-venta').innerHTML=`<div class="grid2"><div>${state.editSaleId?'<div class="card" style="margin-bottom:12px;border:2px solid #f97316"><b>Editando venta existente</b><div class="muted small">Al guardar se mantiene la hora original.</div></div>':''}<div class="row" style="margin-bottom:12px"><input class="input" style="flex:1" placeholder="Buscar producto o promo" value="${state.query}" oninput="state.query=this.value;renderVenta()"><button class="btn btn-secondary">Toca productos para armar pedido</button></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.category===c?'active':''}" onclick="state.category='${c}';renderVenta()">${c}</button>`).join('')}</div><div class="grid3">${prods.map(p=>`<div class="prod" onclick="addProductToCart('${p.id}')"><div><b>${p.name}</b><div>${p.type==='promo'?'<span class="badge">Promo</span><span class="badge">Selecciona bebida</span>':'<span class="badge">Simple</span>'}</div></div><div class="price">${p.isVariablePrice?'Libre':clp(p.salePrice)}</div></div>`).join('')}</div></div><div class="card"><h3>Pedido actual</h3><div class="list">${state.cart.length?state.cart.map(i=>`<div class="item between"><div><b>${i.qty}x ${i.name}</b><div class="muted small">${clp(i.salePrice)}</div></div><button class="btn btn-danger" onclick="removeCart('${i.id}')">X</button></div>`).join(''):'<div class="muted">Sin productos aun.</div>'}</div><div class="item between"><span>Subtotal</span><b>${clp(cartSubtotal())}</b></div><label>Medio de pago</label><select class="input" onchange="state.paymentMode=this.value;renderVenta()"><option value="efectivo" ${state.paymentMode==='efectivo'?'selected':''}>Efectivo</option><option value="transferencia" ${state.paymentMode==='transferencia'?'selected':''}>Transferencia</option><option value="transbank" ${state.paymentMode==='transbank'?'selected':''}>Transbank</option><option value="mixto" ${state.paymentMode==='mixto'?'selected':''}>Mixto</option></select>${mixed}<label style="margin-top:8px">Repartidor</label><select class="input" onchange="setSelectedCourier(this.value);saveLocal()">${couriers().map(c=>`<option value="${c.id}" ${getSelectedCourier()===c.id?'selected':''}>${c.name}</option>`).join('')}</select><div class="item between"><span>Cargo Transbank</span><b>${clp(transbankFee())}</b></div><div class="item between"><span>Total</span><b>${clp(cartTotal())}</b></div><div class="row"><button class="btn btn-secondary" onclick="cancelCart()">Cancelar</button><button class="btn btn-primary" onclick="saveSale()">${state.editSaleId?'Guardar edicion':'Guardar pedido'}</button></div></div></div>`;
+}
+function stockRequirements(items){const req={};(items||[]).forEach(i=>(i.components||[]).forEach(c=>{req[c.productId]=(req[c.productId]||0)+Number(c.qty||0)*Number(i.qty||1)}));return req}
+function stockProblemsForRequirements(req,bid=branchId(),extra={}){return Object.entries(req).map(([pid,qty])=>{const p=product(pid),r=inventoryRow(pid,bid),available=Number((r||{}).stock||0)+Number(extra[pid]||0);return available<qty?`${p?p.name:pid}: disponible ${available}, requerido ${qty}`:''}).filter(Boolean)}
+function stockProblemMessage(problems){return 'No hay stock suficiente. Corrige antes de guardar:\\n- '+problems.join('\\n- ')}
+function stockCreditFromSale(s){return stockRequirements((s||{}).items||[])}
+function invoiceStockRequirements(items){const req={};(items||[]).forEach(i=>{req[i.productId]=(req[i.productId]||0)+Number(i.qty||0)});return req}
 function applyStock(comps,mult,bid=branchId()){(comps||[]).forEach(c=>{let r=inventoryRow(c.productId,bid);if(!r){r={branchId:bid,productId:c.productId,stock:0,cost:0,min:0};state.inventory.push(r)}r.stock=Math.max(0,Number(r.stock||0)+mult*Number(c.qty||0))})}
 function saveSale(){
   if(!canSell())return alert('Usuario solo lectura');
@@ -639,6 +730,9 @@ function saveSale(){
     if(idx<0){ state.editSaleId=null; return alert('No se encontró la venta a editar'); }
 
     const oldSale=state.sales[idx];
+    if(oldSale.branchId!==branchId())return alert('No puedes editar pedidos de otra sucursal');
+    const editProblems=stockProblemsForRequirements(stockRequirements(state.cart),oldSale.branchId,stockCreditFromSale(oldSale));
+    if(editProblems.length)return alert(stockProblemMessage(editProblems));
 
     // Devolver stock antiguo
     oldSale.items.forEach(i=>applyStock(i.components,Number(i.qty||1),oldSale.branchId));
@@ -672,6 +766,8 @@ function saveSale(){
   }
 
   const sale={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),user:state.currentUser.name,courierId:rep.id,courierName:rep.name,items:JSON.parse(JSON.stringify(state.cart)),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,createdAt:Date.now()};
+  const saleProblems=stockProblemsForRequirements(stockRequirements(sale.items),sale.branchId);
+  if(saleProblems.length)return alert(stockProblemMessage(saleProblems));
   sale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),sale.branchId));
   state.sales.push(sale);
   cloudSaveSale(sale); cloudSaveAllInventory();
@@ -684,15 +780,19 @@ function saveSale(){
 }
 
 function renderLibro(){
-  const list=daySales(state.selectedHistoryDate);
-  document.getElementById('view-libro').innerHTML=`<div class="grid2"><div class="card"><h3>Libro diario</h3>${navDate(state.selectedHistoryDate,'setLibroDate')}<div class="muted">Total del día: <b>${clp(summary(list).sales)}</b></div><div class="list" style="margin-top:10px">${list.map(s=>`<div class="item between"><div><b>${s.time}</b><div class="muted small">${s.date} · ${s.courierName}</div><div>${s.items.map(i=>i.qty+'x '+i.name).join(' · ')}</div></div><b>${clp(s.total)}</b>${canManage()?`<div class="row"><button class="btn btn-secondary" onclick="editSale('${s.id}')">Editar</button><button class="btn btn-danger" onclick="deleteSale('${s.id}')">Borrar</button></div>`:''}</div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Productos vendidos</h3>${productsSoldList(list)}</div></div>`
+  const all=daySales(state.selectedHistoryDate);
+  const reps=[...new Map(all.map(s=>[s.courierId,s.courierName||s.courierId])).entries()];
+  const current=reps.some(([id])=>id===state.selectedLibroCourierId)?state.selectedLibroCourierId:'';
+  const list=current?all.filter(s=>s.courierId===current):all;
+  document.getElementById('view-libro').innerHTML=`<div class="grid2"><div class="card"><h3>Libro diario</h3>${navDate(state.selectedHistoryDate,'setLibroDate')}<div class="grid2" style="grid-template-columns:1fr 1fr;margin-bottom:10px"><div><label>Filtrar repartidor</label><select class="input" onchange="state.selectedLibroCourierId=this.value;saveLocal();renderLibro()"><option value="">Todos</option>${reps.map(([id,name])=>`<option value="${id}" ${current===id?'selected':''}>${name}</option>`).join('')}</select></div><div class="item between" style="margin:0"><span>Total filtrado</span><b>${clp(summary(list).sales)}</b></div></div><div class="list" style="margin-top:10px">${list.map(s=>`<div class="item between"><div><b>${s.time}</b><div class="muted small">${s.date} · ${s.courierName}</div><div class="small"><b>Pago:</b> ${paymentText(s)}</div><div>${s.items.map(i=>i.qty+'x '+i.name).join(' · ')}</div></div><b>${clp(s.total)}</b>${canEditDailyOrders()?`<div class="row"><button class="btn btn-secondary" onclick="editSale('${s.id}')">Editar</button><button class="btn btn-danger" onclick="deleteSale('${s.id}')">Borrar</button></div>`:''}</div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Productos vendidos</h3>${productsSoldList(list)}</div></div>`
 }
-function setLibroDate(v){state.selectedHistoryDate=v;renderLibro()}
+function setLibroDate(v){state.selectedHistoryDate=v;state.selectedLibroCourierId='';saveLocal();renderLibro()}
 function productsSoldList(list){const m={};list.forEach(s=>(s.items||[]).forEach(i=>m[i.name]=(m[i.name]||0)+Number(i.qty||0)));return Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,q])=>`<div class="item between"><span>${n}</span><b>${q}</b></div>`).join('')||'<div class="muted">Sin productos.</div>'}
 function editSale(id){
-  if(!canManage())return alert('Sin permiso');
+  if(!canEditDailyOrders())return alert('Sin permiso');
   const s=state.sales.find(x=>x.id===id);
   if(!s)return alert('Venta no encontrada');
+  if(s.branchId!==branchId())return alert('No puedes editar pedidos de otra sucursal');
 
   state.editSaleId=s.id;
   state.cart=JSON.parse(JSON.stringify(s.items||[]));
@@ -708,7 +808,7 @@ function editSale(id){
   saveLocal();
   render();
 }
-function deleteSale(id){if(!canManage())return;const idx=state.sales.findIndex(s=>s.id===id);if(idx<0)return;const s=state.sales[idx];s.items.forEach(i=>applyStock(i.components,Number(i.qty||1),s.branchId));state.sales.splice(idx,1);cloudDeleteSale(id);cloudSaveAllInventory();saveLocal();renderLibro()}
+function deleteSale(id){if(!canEditDailyOrders())return;const idx=state.sales.findIndex(s=>s.id===id);if(idx<0)return;const s=state.sales[idx];if(s.branchId!==branchId())return alert('No puedes borrar pedidos de otra sucursal');s.items.forEach(i=>applyStock(i.components,Number(i.qty||1),s.branchId));state.sales.splice(idx,1);cloudDeleteSale(id);cloudSaveAllInventory();saveLocal();renderLibro()}
 
 function renderMayor(){
   const list=monthSales(),by={};list.forEach(s=>{by[s.date]=by[s.date]||[];by[s.date].push(s)});const rows=Object.entries(by).sort((a,b)=>parseDMY(a[0])-parseDMY(b[0]));
@@ -719,12 +819,14 @@ function setMonthNav(v){state.selectedMonth=v;render()}
 
 function renderCapital(){
   const list=monthSales(),sm=summary(list),pay=periodPayments(list);
-  const invTotal=monthInvoices().reduce((a,i)=>a+Number(i.total||0),0);
+  const invTotal=capitalInvoicesForMonth().reduce((a,i)=>a+Number(i.total||0),0);
   const fuel=monthClosures().reduce((a,c)=>a+Number(c.fuelExpense||0),0);
   const valorBodega = inventoryValue();
   const dineroCostoCaja = costMoneyInCaja();
   const capitalControlado = controlledCapitalTotal();
-  document.getElementById('view-capital').innerHTML=`<div class="card"><h3>Control capital / caja</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="grid3">
+  const reset=branchId()==='all'?null:lastCapitalReset(branchId());
+  const resetBox=canManage()?`<div class="card danger-card" style="margin-bottom:14px"><h3>Reset inventario / capital</h3><div class="muted small">Uso de emergencia para la sucursal ${branchName()}. Deja inventario, costos y capital controlado en cero desde este momento. No borra ventas historicas ni login.</div>${reset?`<div class="badge" style="margin-top:8px">Ultimo reset: ${reset.date} ${reset.time||''}</div>`:''}<button class="btn btn-danger" style="margin-top:10px" onclick="resetInventoryAndCapital()">Resetear inventario y capital</button></div>`:'';
+  document.getElementById('view-capital').innerHTML=`${resetBox}<div class="card"><h3>Control capital / caja</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="grid3">
     <div class="card success-card"><h4>Dinero costo que debe haber en caja</h4><div class="stat green">${clp(dineroCostoCaja)}</div><div class="muted small">Costo de los productos vendidos. Plata destinada a reponer lo vendido.</div></div>
     <div class="card"><h4>Valor inventario en bodega</h4><div class="stat">${clp(valorBodega)}</div><div class="muted small">Mercadería que queda valorizada por costo.</div></div>
     <div class="card"><h4>Capital controlado</h4><div class="stat">${clp(capitalControlado)}</div><div class="muted small">Bodega + dinero costo recuperado.</div></div>
@@ -750,19 +852,40 @@ function renderInventario(){
   const rows=state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()),edit=canManage();
   document.getElementById('view-inventario').innerHTML=`${edit?`<div class="card"><h3>Ajuste de inventario</h3><div class="grid3"><div><label>Producto</label><select id="invProd" class="input">${state.products.filter(p=>p.type==='simple'&&p.trackStock!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label>Acción</label><select id="invAction" class="input"><option value="add">Agregar stock</option><option value="sub">Quitar stock</option></select></div><div><label>Cantidad</label><input id="invQty" class="input" type="number" value="1"></div><div><label>Stock mínimo</label><input id="invMin" class="input" type="number" value="0"></div><div><label>Costo unitario</label><input id="invCost" class="input" type="number" value="0"></div></div><button class="btn btn-primary" style="margin-top:12px" onclick="adjustInventory()">Guardar ajuste</button></div>`:`<div class="card"><h3>Inventario</h3><div class="muted">Vista solo lectura.</div></div>`}<div class="grid3" style="margin-top:14px">${rows.map(r=>{const p=product(r.productId);return `<div class="item between"><div><b>${p?p.name:r.productId}</b><div class="muted small">${branchName(r.branchId)} · ${canSeeFinancial()?`Costo: ${clp(r.cost)} · `:''}Mínimo: ${r.min}</div></div><b class="${Number(r.stock)<=Number(r.min)?'red':'green'}">${r.stock}</b></div>`}).join('')||'<div class="card muted">No hay inventario.</div>'}</div>`
 }
-function adjustInventory(){if(!canManage())return alert('Sin permiso');const pid=document.getElementById('invProd').value,act=document.getElementById('invAction').value,qty=Number(document.getElementById('invQty').value||0),min=Number(document.getElementById('invMin').value||0),cost=Number(document.getElementById('invCost').value||0);let r=inventoryRow(pid);if(!r){r={branchId:branchId(),productId:pid,stock:0,cost:0,min:0};state.inventory.push(r)}r.stock=Math.max(0,Number(r.stock||0)+(act==='add'?qty:-qty));r.min=min;if(cost>0)r.cost=cost;cloudSaveInventoryRow(r);saveLocal();renderInventario()}
+function adjustInventory(){if(!canManage())return alert('Sin permiso');const pid=document.getElementById('invProd').value,act=document.getElementById('invAction').value,qty=Number(document.getElementById('invQty').value||0),min=Number(document.getElementById('invMin').value||0),cost=Number(document.getElementById('invCost').value||0);if(!pid)return alert('Elige un producto');let r=inventoryRow(pid);if(!r){r={branchId:branchId(),productId:pid,stock:0,cost:0,min:0};state.inventory.push(r)}if(act==='sub'&&Number(r.stock||0)<qty)return alert(stockProblemMessage([`${product(pid)?.name||pid}: disponible ${Number(r.stock||0)}, requerido ${qty}`]));r.stock=Number(r.stock||0)+(act==='add'?qty:-qty);r.min=min;if(cost>0)r.cost=cost;cloudSaveInventoryRow(r);saveLocal();renderInventario()}
+
+renderInventario=function(){
+  const edit=canManage();
+  const invProducts=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase())));
+  const rows=state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()).filter(r=>{const p=product(r.productId);return p&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase()))});
+  const tabs=`<div class="row" style="margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.invQuery||''}" oninput="state.invQuery=this.value;renderInventario()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.invCategory===c?'active':''}" onclick="state.invCategory='${c}';state.invQuery='';renderInventario()">${c}</button>`).join('')}</div>`;
+  document.getElementById('view-inventario').innerHTML=`${edit?`<div class="card"><h3>Ajuste de inventario</h3>${tabs}<div class="grid3"><div><label>Producto</label><select id="invProd" class="input">${invProducts.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label>Accion</label><select id="invAction" class="input"><option value="add">Agregar stock</option><option value="sub">Quitar stock</option></select></div><div><label>Cantidad</label><input id="invQty" class="input" type="number" value="1"></div><div><label>Stock minimo</label><input id="invMin" class="input" type="number" value="0"></div><div><label>Costo unitario</label><input id="invCost" class="input" type="number" value="0"></div></div><button class="btn btn-primary" style="margin-top:12px" onclick="adjustInventory()">Guardar ajuste</button></div>`:`<div class="card"><h3>Inventario</h3>${tabs}<div class="muted">Vista solo lectura.</div></div>`}<div class="grid3" style="margin-top:14px">${rows.map(r=>{const p=product(r.productId);return `<div class="item between"><div><b>${p?p.name:r.productId}</b><div class="muted small">${branchName(r.branchId)} · ${canSeeFinancial()?`Costo: ${clp(r.cost)} · `:''}Minimo: ${r.min}</div></div><b class="${Number(r.stock)<=Number(r.min)?'red':'green'}">${r.stock}</b></div>`}).join('')||'<div class="card muted">No hay inventario en esta categoria.</div>'}</div>`
+}
 
 function renderFacturas(){
   const invs=monthInvoices();
   const draftTotal=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
+  const currentType=invoiceTypeValue(state.invoiceType);
+  const capitalTotal=invs.filter(f=>invoiceTypeValue(f.type)==='capitalInicial').reduce((a,f)=>a+Number(f.total||0),0);
+  const reposicionTotal=invs.filter(f=>invoiceTypeValue(f.type)==='reposicion').reduce((a,f)=>a+Number(f.total||0),0);
+  const facProducts=state.products.filter(p=>p.active!==false&&p.category===state.facCategory&&(!state.facQuery||p.name.toLowerCase().includes(state.facQuery.toLowerCase())));
+  const facStockProducts=facProducts.filter(invoiceSelectableProduct);
+  const facTabs=`<div class="row" style="margin-top:8px;margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.facQuery||''}" oninput="state.facQuery=this.value;renderFacturas()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.facCategory===c?'active':''}" onclick="state.facCategory='${c}';state.facQuery='';renderFacturas()">${c}</button>`).join('')}</div>`;
   document.getElementById('view-facturas').innerHTML=`<div class="grid2">
     <div class="card">
       <h3>${state.editInvoiceId?'Editar factura':'Factura entrante'}</h3>
       ${canManage()?`
         <label>Proveedor</label>
         <input id="facProv" class="input" placeholder="Proveedor" value="${state.invoiceProvider||''}">
+        <label style="margin-top:8px">Tipo de ingreso</label>
+        <select id="facType" class="input" onchange="state.invoiceType=this.value;saveLocal()">
+          <option value="reposicion" ${currentType==='reposicion'?'selected':''}>Factura reposicion</option>
+          <option value="capitalInicial" ${currentType==='capitalInicial'?'selected':''}>Capital inicial</option>
+        </select>
         <label style="margin-top:8px">Producto</label>
-        <select id="facProd" class="input">${state.products.filter(p=>p.type==='simple'&&p.trackStock!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+        ${facTabs}
+        <select id="facProd" class="input">${facStockProducts.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+        <div class="grid3" style="margin-top:10px">${facProducts.map(p=>`<div class="prod" onclick="selectInvoiceProduct('${p.id}')" style="${invoiceSelectableProduct(p)?'':'opacity:.65'}"><div><b>${p.name}</b><div><span class="badge">${p.type==='promo'?'Combo / promo':'Inventario'}</span>${invoiceSelectableProduct(p)?'':'<span class="badge">Ver componentes</span>'}</div></div><div class="price">${invoiceSelectableProduct(p)?'Elegir':'Info'}</div></div>`).join('')||'<div class="muted">Sin productos en esta categoria.</div>'}</div>
         <div class="grid3" style="margin-top:8px">
           <input id="facQty" class="input" type="number" placeholder="Cantidad">
           <input id="facCost" class="input" type="number" placeholder="Costo unitario">
@@ -782,15 +905,17 @@ function renderFacturas(){
       `:'<div class="muted">Vista solo lectura.</div>'}
     </div>
     <div class="card">
-      <h3>Facturas del mes</h3>${navMonth(state.selectedMonth,'setMonthNav')}
-      <div class="list">${invs.map(f=>`<div class="item"><div class="between"><div><b>${f.provider}</b><div class="muted small">${f.date} · ${f.items.length} productos</div></div><b>${clp(f.total)}</b></div><div class="small">${f.items.map(i=>`${i.qty}x ${product(i.productId)?.name||i.productId}`).join(' · ')}</div>${canManage()?`<div class="row" style="margin-top:8px"><button class="btn btn-secondary" onclick="editInvoice('${f.id}')">Editar</button><button class="btn btn-danger" onclick="deleteInvoice('${f.id}')">Borrar factura</button></div>`:''}</div>`).join('')||'<div class="muted">Sin facturas.</div>'}</div>
+      <h3>Facturas del mes</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="row" style="margin-bottom:10px"><span class="badge">Capital inicial: ${clp(capitalTotal)}</span><span class="badge">Reposicion: ${clp(reposicionTotal)}</span></div>
+      <div class="list">${invs.map(f=>`<div class="item"><div class="between"><div><b>${f.provider}</b><div class="muted small">${f.date} · ${f.items.length} productos</div><span class="badge">${invoiceTypeLabel(f.type)}</span></div><b>${clp(f.total)}</b></div><div class="small">${f.items.map(i=>`${i.qty}x ${product(i.productId)?.name||i.productId}`).join(' · ')}</div>${canManage()?`<div class="row" style="margin-top:8px"><button class="btn btn-secondary" onclick="editInvoice('${f.id}')">Editar</button><button class="btn btn-danger" onclick="deleteInvoice('${f.id}')">Borrar factura</button></div>`:''}</div>`).join('')||'<div class="muted">Sin facturas.</div>'}</div>
     </div>
   </div>`
 }
 function addInvoiceItem(){
   if(!canManage())return alert('Sin permiso');
   const provider=document.getElementById('facProv').value.trim()||'Proveedor';
+  state.invoiceType=invoiceTypeValue(document.getElementById('facType')?.value||state.invoiceType);
   const pid=document.getElementById('facProd').value;
+  if(!pid)return alert('Elige un producto');
   const qty=Number(document.getElementById('facQty').value||0);
   const cost=Number(document.getElementById('facCost').value||0);
   if(!qty||!cost)return alert('Cantidad y costo requeridos');
@@ -809,6 +934,7 @@ function cancelInvoiceDraft(){
   state.invoiceDraft=[];
   state.editInvoiceId=null;
   state.invoiceProvider='';
+  state.invoiceType='reposicion';
   saveLocal();
   renderFacturas();
 }
@@ -827,12 +953,15 @@ function deleteInvoice(id){
   if(idx<0)return alert('Factura no encontrada');
   if(!confirm('¿Borrar esta factura completa y descontarla del inventario?'))return;
   const old=state.invoices[idx];
+  const deleteProblems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);
+  if(deleteProblems.length)return alert(stockProblemMessage(deleteProblems));
   applyInvoiceStock(old.items,-1,old.branchId);
   state.invoices.splice(idx,1);
   if(state.editInvoiceId===id){
     state.editInvoiceId=null;
     state.invoiceDraft=[];
     state.invoiceProvider='';
+    state.invoiceType='reposicion';
   }
   cloudDeleteInvoice(id);
   saveLocal();
@@ -845,6 +974,7 @@ function editInvoice(id){
   if(!f)return alert('Factura no encontrada');
   state.editInvoiceId=f.id;
   state.invoiceProvider=f.provider||'Proveedor';
+  state.invoiceType=invoiceTypeValue(f.type);
   state.invoiceDraft=JSON.parse(JSON.stringify(f.items||[]));
   state.selectedMonth=monthKey(f.date);
   saveLocal();
@@ -853,6 +983,7 @@ function editInvoice(id){
 function saveInvoice(){
   if(!canManage())return alert('Sin permiso');
   const provider=(document.getElementById('facProv')?.value.trim()) || state.invoiceProvider || 'Proveedor';
+  const type=invoiceTypeValue(document.getElementById('facType')?.value||state.invoiceType);
   if(!state.invoiceDraft.length && !state.editInvoiceId)return alert('Agrega productos a la factura');
   const total=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
 
@@ -868,11 +999,13 @@ function saveInvoice(){
     const idx=state.invoices.findIndex(f=>f.id===state.editInvoiceId);
     if(idx<0){state.editInvoiceId=null;return alert('Factura no encontrada')}
     const old=state.invoices[idx];
+    const editInvoiceProblems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);
+    if(editInvoiceProblems.length)return alert(stockProblemMessage(editInvoiceProblems));
 
     // Revertir inventario anterior
     applyInvoiceStock(old.items,-1,old.branchId);
 
-    const edited={...old,provider,items:JSON.parse(JSON.stringify(state.invoiceDraft)),total,editedAt:Date.now(),editedBy:state.currentUser.name};
+    const edited={...old,provider,type,items:JSON.parse(JSON.stringify(state.invoiceDraft)),total,editedAt:Date.now(),editedBy:state.currentUser.name};
 
     // Aplicar inventario nuevo
     applyInvoiceStock(edited.items,1,edited.branchId);
@@ -882,19 +1015,21 @@ function saveInvoice(){
     state.invoiceDraft=[];
     state.editInvoiceId=null;
     state.invoiceProvider='';
+    state.invoiceType='reposicion';
     saveLocal();
     renderFacturas();
     toast('Factura editada');
     return;
   }
 
-  const inv={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),provider,items:JSON.parse(JSON.stringify(state.invoiceDraft)),total,createdAt:Date.now()};
+  const inv={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),provider,type,items:JSON.parse(JSON.stringify(state.invoiceDraft)),total,createdAt:Date.now()};
   applyInvoiceStock(inv.items,1,inv.branchId);
   state.invoices.push(inv);
   cloudSaveInvoice(inv);
   state.invoiceDraft=[];
   state.editInvoiceId=null;
   state.invoiceProvider='';
+  state.invoiceType='reposicion';
   saveLocal();
   renderFacturas();
   toast('Factura ingresada');
@@ -921,11 +1056,82 @@ function updateProductPrice(id,value){
 function addCategory(){if(!canManage())return;const c=document.getElementById('newCat').value.trim();if(c&&!state.categories.includes(c))state.categories.push(c);cloudSaveConfig();saveLocal();renderProductos()}
 function addProductManual(){if(!canManage())return;const name=document.getElementById('npName').value.trim();if(!name)return;state.products.push({id:uid(),name,category:document.getElementById('npCat').value,salePrice:Number(document.getElementById('npPrice').value||0),type:'simple',active:true,trackStock:true});seedInventory();cloudSaveConfig();cloudSaveAllInventory();saveLocal();renderProductos()}
 
+renderProductos=function(){
+  const simpleStock=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false);
+  document.getElementById('view-productos').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar categoria</h3>${canManage()?`<input id="newCat" class="input" placeholder="Ej: Energeticas"><button class="btn btn-primary" style="margin-top:10px" onclick="addCategory()">Guardar categoria</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Agregar producto</h3>${canManage()?`<label>Nombre</label><input id="npName" class="input"><label>Tipo</label><select id="npType" class="input"><option value="simple">Producto simple</option><option value="promo">Combo / promo con bebida</option></select><label>Categoria</label><select id="npCat" class="input">${state.categories.map(c=>`<option>${c}</option>`).join('')}</select><label>Precio venta</label><input id="npPrice" type="number" class="input" value="0"><label>Producto base del combo</label><select id="npBase" class="input"><option value="">Sin base</option>${simpleStock.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><label>Tamano bebida del combo</label><select id="npDrinkSize" class="input"><option value="1.5">Bebida 1.5lt</option><option value="3">Bebida 3lt</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addProductManual()">Guardar producto</button>`:'<div class="muted">Solo lectura.</div>'}</div></div>
+  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3><div class="list">${state.products.map(p=>`<div class="item">
+    <div class="between">
+      <div><b>${p.name}</b><div class="muted small">${p.category} · ${p.type}${p.type==='promo'?` · base: ${product(p.baseProductId)?.name||p.baseProductId||'-'} · bebida ${p.drinkSize||'-'} · hielo automatico`:''}</div></div>
+      <div style="min-width:180px">${canManage()?`<label>Precio venta</label><input class="input" type="number" value="${p.salePrice}" onchange="updateProductPrice('${p.id}',this.value)">`:`<b>${clp(p.salePrice)}</b>`}</div>
+    </div>
+  </div>`).join('')}</div></div>`
+}
+addProductManual=function(){
+  if(!canManage())return;
+  const name=document.getElementById('npName').value.trim();
+  if(!name)return;
+  const type=document.getElementById('npType').value;
+  const item={id:uid(),name,category:document.getElementById('npCat').value,salePrice:Number(document.getElementById('npPrice').value||0),type,active:true,trackStock:type==='simple'};
+  if(type==='promo'){
+    item.baseProductId=document.getElementById('npBase').value;
+    item.drinkSize=document.getElementById('npDrinkSize').value;
+    item.trackStock=true;
+    if(!item.baseProductId)return alert('El combo necesita producto base');
+  }
+  state.products.push(item);
+  state.prodCategory=item.category;
+  state.prodQuery='';
+  seedInventory();
+  cloudSaveConfig();
+  cloudSaveAllInventory();
+  saveLocal();
+  renderProductos();
+}
+renderProductos=function(){
+  const simpleStock=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false);
+  const shown=state.products.filter(p=>p.category===state.prodCategory&&(!state.prodQuery||p.name.toLowerCase().includes(state.prodQuery.toLowerCase())));
+  const menu=`<div class="row" style="margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.prodQuery||''}" oninput="state.prodQuery=this.value;renderProductos()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.prodCategory===c?'active':''}" onclick="state.prodCategory='${c}';state.prodQuery='';renderProductos()">${c}</button>`).join('')}</div>`;
+  document.getElementById('view-productos').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar categoria</h3>${canManage()?`<input id="newCat" class="input" placeholder="Ej: Energeticas"><button class="btn btn-primary" style="margin-top:10px" onclick="addCategory()">Guardar categoria</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Agregar producto</h3>${canManage()?`<label>Nombre</label><input id="npName" class="input"><label>Tipo</label><select id="npType" class="input"><option value="simple">Producto simple</option><option value="promo">Combo / promo con bebida</option></select><label>Categoria</label><select id="npCat" class="input">${state.categories.map(c=>`<option ${state.prodCategory===c?'selected':''}>${c}</option>`).join('')}</select><label>Precio venta</label><input id="npPrice" type="number" class="input" value="0"><label>Producto base del combo</label><select id="npBase" class="input"><option value="">Sin base</option>${simpleStock.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><label>Tamano bebida del combo</label><select id="npDrinkSize" class="input"><option value="1.5">Bebida 1.5lt</option><option value="3">Bebida 3lt</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addProductManual()">Guardar producto</button>`:'<div class="muted">Solo lectura.</div>'}</div></div>
+  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3>${menu}<div class="list">${shown.map(p=>`<div class="item">
+    <div class="between">
+      <div><b>${p.name}</b><div class="muted small">${p.category} · ${p.type}${p.type==='promo'?` · base: ${product(p.baseProductId)?.name||p.baseProductId||'-'} · bebida ${p.drinkSize||'-'} · hielo automatico`:''}</div></div>
+      <div style="min-width:180px">${canManage()?`<label>Precio venta</label><input class="input" type="number" value="${p.salePrice}" onchange="updateProductPrice('${p.id}',this.value)">`:`<b>${clp(p.salePrice)}</b>`}</div>
+    </div>
+  </div>`).join('')||'<div class="muted">Sin productos en esta categoria.</div>'}</div></div>`
+}
+
 function renderUsuarios(){
   document.getElementById('view-usuarios').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar usuario / repartidor</h3>${canManage()?`<input id="nuName" class="input" placeholder="Nombre usuario"><select id="nuRole" class="input" style="margin-top:8px"><option value="admin">Administrador</option><option value="operador">Operador</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addUser()">Guardar usuario</button><hr><input id="nrName" class="input" placeholder="Nuevo repartidor"><button class="btn btn-secondary" style="margin-top:10px" onclick="addCourier()">Agregar repartidor</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Usuarios y repartidores</h3><div class="list">${state.users.map(u=>`<div class="item"><b>${u.name}</b><div class="muted small">${u.role} · ${branchName(u.branchId)}</div>${canManage()?`<label>Clave</label><input class="input" value="${u.password}" onchange="u.password=this.value;cloudSaveConfig();saveLocal()">`:''}</div>`).join('')}<hr>${state.couriers.map(c=>`<div class="item between"><span>${c.name} · ${branchName(c.branchId)}</span></div>`).join('')}</div></div></div>`
 }
 function addUser(){if(!canManage())return;const name=document.getElementById('nuName').value.trim(),role=document.getElementById('nuRole').value;if(!name)return;state.users.push({id:uid(),username:name.toLowerCase().replace(/\s+/g,''),name,role,branchId:branchId(),password:role==='operador'?'1111':'1234'});cloudSaveConfig();saveLocal();renderUsuarios()}
 function addCourier(){if(!canManage())return;const name=document.getElementById('nrName').value.trim();if(!name)return;state.couriers.push({id:uid(),name,branchId:branchId(),active:true});cloudSaveConfig();saveLocal();renderUsuarios()}
+
+renderUsuarios=function(){
+  const branchOptions=state.branches.map(b=>`<option value="${b.id}">${b.name}</option>`).join('');
+  document.getElementById('view-usuarios').innerHTML=`<div class="grid2"><div><div class="card"><h3>Agregar usuario</h3>${canManage()?`<input id="nuName" class="input" placeholder="Nombre usuario"><select id="nuRole" class="input" style="margin-top:8px"><option value="admin">Administrador</option><option value="operador">Operador</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addUser()">Guardar usuario</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card" style="margin-top:14px"><h3>Repartidores</h3>${canManage()?`<label>Nombre repartidor</label><input id="nrName" class="input" placeholder="Nuevo repartidor"><label style="margin-top:8px">Sucursal</label><select id="nrBranch" class="input">${branchOptions}</select><button class="btn btn-primary" style="margin-top:10px" onclick="addCourier()">Agregar repartidor</button>`:'<div class="muted">Solo lectura.</div>'}</div></div><div class="card"><h3>Usuarios</h3><div class="list">${state.users.map(u=>`<div class="item"><b>${u.name}</b><div class="muted small">${u.role} · ${branchName(u.branchId)}</div>${canManage()?`<label>Clave</label><input class="input" value="${u.password}" onchange="u.password=this.value;cloudSaveConfig();saveLocal()">`:''}</div>`).join('')}</div><hr><h3>Repartidores cargados</h3><div class="list">${state.couriers.map(c=>`<div class="item between"><div><b>${c.name}</b><div class="muted small">${branchName(c.branchId)}</div></div>${canManage()?`<button class="btn btn-danger" onclick="deleteCourier('${c.id}')">Borrar</button>`:''}</div>`).join('')||'<div class="muted">No hay repartidores cargados.</div>'}</div></div></div>`
+}
+addCourier=function(){
+  if(!canManage())return;
+  const name=document.getElementById('nrName').value.trim();
+  const branch=document.getElementById('nrBranch')?.value||branchId();
+  if(!name)return alert('Escribe el nombre del repartidor');
+  state.couriers.push({id:uid(),name,branchId:branch,active:true});
+  if(branch===branchId()&&!getSelectedCourier())setSelectedCourier(state.couriers[state.couriers.length-1].id);
+  cloudSaveConfig();
+  saveLocal();
+  renderUsuarios();
+}
+function deleteCourier(id){
+  if(!canManage())return;
+  const c=state.couriers.find(x=>x.id===id);
+  if(!c)return;
+  if(!confirm(`Borrar repartidor ${c.name}?`))return;
+  state.couriers=state.couriers.filter(x=>x.id!==id);
+  if(state.selectedCourierId===id)setSelectedCourier((couriers()[0]||{}).id||'');
+  cloudSaveConfig();
+  saveLocal();
+  renderUsuarios();
+}
 
 function renderTurno(){
   const ds=daySales(state.activeDate),sm=summary(ds),fuel=Number(getFuelDraft()||0),clos=monthClosures(monthKey(state.activeDate)).sort((a,b)=>b.createdAt-a.createdAt);
@@ -935,11 +1141,277 @@ function closeShift(){if(isOwner())return alert('Dueño solo lectura');const fue
 function openNewDay(){if(isOwner())return;state.activeDate=document.getElementById('newDay').value||shiftDate(state.activeDate,1);state.selectedHistoryDate=state.activeDate;state.selectedCourierDate=state.activeDate;state.selectedMonth=monthKey(state.activeDate);setTurnOpen(true);setFuelDraft('');saveLocal();render()}
 function reopenSameDay(){if(isOwner())return;setTurnOpen(true);saveLocal();renderTurno();render()}
 
+function cloneData(v){return JSON.parse(JSON.stringify(v))}
+function saleCloudCopy(s,status='synced'){const c=cloneData(s);c.syncStatus=status;return c}
+function invoiceCloudCopy(i){return cloneData(i)}
+function uniqueProductIdsFromItems(items){const ids=new Set();(items||[]).forEach(i=>(i.components||[]).forEach(c=>ids.add(c.productId)));return [...ids]}
+function inventoryRowsForProductIds(ids,bid){return ids.map(pid=>inventoryRow(pid,bid)).filter(Boolean)}
+function inventoryRowsForSale(s){return inventoryRowsForProductIds(uniqueProductIdsFromItems((s||{}).items||[]),(s||{}).branchId)}
+function inventoryRowsForInvoiceItems(items,bid){return inventoryRowsForProductIds([...(new Set((items||[]).map(i=>i.productId)))],bid)}
+async function cloudSaveInventoryRows(rows){if(!canUseFirebase())return;await Promise.all((rows||[]).map(r=>cloudSaveInventoryRow(r)))}
+function applyInvoiceStockLocal(items,mult,bid=branchId()){
+  (items||[]).forEach(i=>{
+    let r=inventoryRow(i.productId,bid);
+    if(!r){r={branchId:bid,productId:i.productId,stock:0,cost:0,min:0};state.inventory.push(r)}
+    r.stock=Math.max(0,Number(r.stock||0)+mult*Number(i.qty||0));
+    if(mult>0 && Number(i.cost||0)>0) r.cost=Number(i.cost||0);
+  });
+}
+function mergeById(cloudRows,localRows,key='id'){
+  const map=new Map((cloudRows||[]).map(r=>[r[key],r]));
+  (localRows||[]).forEach(r=>{if(r&&r[key]&&!map.has(r[key]))map.set(r[key],r)});
+  return [...map.values()];
+}
+async function syncPendingSales(){
+  if(!canUseFirebase())return;
+  const pending=(state.sales||[]).filter(s=>s.syncStatus&&s.syncStatus!=='synced');
+  for(const sale of pending){
+    try{
+      await cloudSaveSale(saleCloudCopy(sale,'synced'));
+      await cloudSaveInventoryRows(inventoryRowsForSale(sale));
+      sale.syncStatus='synced';
+      sale.syncedAt=Date.now();
+    }catch(e){
+      console.error('Venta pendiente no sincronizada',e);
+    }
+  }
+  saveLocal();
+}
+cloudLoadAll=async function(){
+  const localSales=cloneData(state.sales||[]);
+  const pendingSales=localSales.filter(s=>s.syncStatus&&s.syncStatus!=='synced');
+  const ok=await waitFirebaseReady();
+  if(!ok){
+    toast('Firebase no cargó. Usando respaldo local.');
+    return;
+  }
+  try{
+    await cloudLoadConfig();
+    seedInventory();
+    await cloudLoadInventory();
+    const [sales,invoices,closures,capitalResets]=await Promise.all([
+      cloudLoadCollection('sales'),
+      cloudLoadCollection('invoices'),
+      cloudLoadCollection('closures'),
+      cloudLoadCollection('capitalResets')
+    ]);
+    state.sales=mergeById(Array.isArray(sales)?sales:[],pendingSales);
+    state.invoices=Array.isArray(invoices)?invoices:[];
+    state.closures=Array.isArray(closures)?closures:[];
+    state.capitalResets=Array.isArray(capitalResets)?capitalResets:[];
+    pendingSales.forEach(s=>{
+      if(!(sales||[]).some(x=>x.id===s.id)){
+        (s.items||[]).forEach(i=>applyStock(i.components,-Number(i.qty||1),s.branchId));
+      }
+    });
+    seedInventory();
+    saveLocal();
+    await syncPendingSales();
+    toast(pendingSales.length?'Datos cargados y pendientes sincronizados':'Datos cargados desde Firebase');
+  }catch(e){
+    console.error('Error cargando Firebase',e);
+    toast('Error Firebase. Usando respaldo local.');
+  }
+}
+saveSale=async function(){
+  if(!canSell())return alert('Usuario solo lectura');
+  if(!getTurnOpen() && !state.editSaleId)return alert('Debes abrir el turno para registrar ventas.');
+  if(!state.cart.length)return alert('No hay productos');
+  if(!getSelectedCourier())return alert('Elige repartidor');
+  const total=cartTotal();
+  let payments={efectivo:0,transferencia:0,transbank:0};
+  if(state.paymentMode==='efectivo')payments.efectivo=total;
+  if(state.paymentMode==='transferencia')payments.transferencia=total;
+  if(state.paymentMode==='transbank')payments.transbank=total;
+  if(state.paymentMode==='mixto'){
+    payments={efectivo:Number(state.mixEf||0),transferencia:Number(state.mixTr||0),transbank:Number(state.mixTb||0)};
+    if(payments.efectivo+payments.transferencia+payments.transbank!==total)return alert('El pago mixto no cuadra');
+  }
+  const rep=state.couriers.find(c=>c.id===getSelectedCourier())||{};
+  if(state.editSaleId){
+    const idx=state.sales.findIndex(s=>s.id===state.editSaleId);
+    if(idx<0){state.editSaleId=null;return alert('No se encontró la venta a editar')}
+    const oldSale=state.sales[idx];
+    const editProblems=stockProblemsForRequirements(stockRequirements(state.cart),oldSale.branchId,stockCreditFromSale(oldSale));
+    if(editProblems.length)return alert(stockProblemMessage(editProblems));
+    oldSale.items.forEach(i=>applyStock(i.components,Number(i.qty||1),oldSale.branchId));
+    const editedSale={...oldSale,courierId:rep.id,courierName:rep.name,items:cloneData(state.cart),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,editedAt:Date.now(),editedBy:state.currentUser.name,syncStatus:'pendingEdit'};
+    editedSale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),editedSale.branchId));
+    state.sales[idx]=editedSale;
+    state.cart=[];state.editSaleId=null;state.view='libro';saveLocal();render();
+    try{
+      await cloudSaveSale(saleCloudCopy(editedSale,'synced'));
+      await cloudSaveInventoryRows(inventoryRowsForProductIds([...uniqueProductIdsFromItems(oldSale.items),...uniqueProductIdsFromItems(editedSale.items)],editedSale.branchId));
+      editedSale.syncStatus='synced';editedSale.syncedAt=Date.now();saveLocal();toast('Venta editada');
+    }catch(e){
+      console.error(e);toast('Venta editada localmente. Pendiente Firebase.');
+    }
+    return;
+  }
+  const sale={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),user:state.currentUser.name,courierId:rep.id,courierName:rep.name,items:cloneData(state.cart),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,createdAt:Date.now(),syncStatus:'pending'};
+  const saleProblems=stockProblemsForRequirements(stockRequirements(sale.items),sale.branchId);
+  if(saleProblems.length)return alert(stockProblemMessage(saleProblems));
+  sale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),sale.branchId));
+  state.sales.push(sale);state.cart=[];state.selectedHistoryDate=state.activeDate;state.view='libro';saveLocal();render();
+  try{
+    await cloudSaveSale(saleCloudCopy(sale,'synced'));
+    await cloudSaveInventoryRows(inventoryRowsForSale(sale));
+    sale.syncStatus='synced';sale.syncedAt=Date.now();saveLocal();toast('Pedido registrado');
+  }catch(e){
+    console.error(e);toast('Pedido guardado local. Pendiente Firebase.');
+  }
+}
+deleteSale=async function(id){
+  if(!canEditDailyOrders())return;
+  const idx=state.sales.findIndex(s=>s.id===id);if(idx<0)return;
+  const s=state.sales[idx];
+  if(s.branchId!==branchId())return alert('No puedes borrar pedidos de otra sucursal');
+  s.items.forEach(i=>applyStock(i.components,Number(i.qty||1),s.branchId));
+  try{
+    await cloudSaveInventoryRows(inventoryRowsForSale(s));
+    await cloudDeleteSale(id);
+    state.sales.splice(idx,1);saveLocal();renderLibro();toast('Venta borrada');
+  }catch(e){
+    s.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),s.branchId));
+    console.error(e);alert('No se pudo borrar en Firebase. Intenta nuevamente.');
+  }
+}
+adjustInventory=async function(){
+  if(!canManage())return alert('Sin permiso');
+  const pid=document.getElementById('invProd').value,act=document.getElementById('invAction').value,qty=Number(document.getElementById('invQty').value||0),min=Number(document.getElementById('invMin').value||0),cost=Number(document.getElementById('invCost').value||0);
+  if(!pid)return alert('Elige un producto');
+  let r=inventoryRow(pid);if(!r){r={branchId:branchId(),productId:pid,stock:0,cost:0,min:0};state.inventory.push(r)}
+  const before={...r};
+  if(act==='sub'&&Number(r.stock||0)<qty)return alert(stockProblemMessage([`${product(pid)?.name||pid}: disponible ${Number(r.stock||0)}, requerido ${qty}`]));
+  r.stock=Number(r.stock||0)+(act==='add'?qty:-qty);r.min=min;if(cost>0)r.cost=cost;
+  try{await cloudSaveInventoryRow(r);saveLocal();renderInventario();toast('Inventario actualizado')}catch(e){Object.assign(r,before);console.error(e);alert('No se pudo guardar inventario en Firebase')}
+}
+deleteInvoice=async function(id){
+  if(!canManage())return alert('Sin permiso');
+  const idx=state.invoices.findIndex(f=>f.id===id);if(idx<0)return alert('Factura no encontrada');
+  if(!confirm('¿Borrar esta factura completa y descontarla del inventario?'))return;
+  const old=state.invoices[idx];
+  const deleteProblems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);
+  if(deleteProblems.length)return alert(stockProblemMessage(deleteProblems));
+  applyInvoiceStockLocal(old.items,-1,old.branchId);
+  try{
+    await cloudSaveInventoryRows(inventoryRowsForInvoiceItems(old.items,old.branchId));
+    await cloudDeleteInvoice(id);
+    state.invoices.splice(idx,1);saveLocal();renderFacturas();toast('Factura borrada');
+  }catch(e){
+    applyInvoiceStockLocal(old.items,1,old.branchId);
+    console.error(e);alert('No se pudo borrar factura en Firebase');
+  }
+}
+saveInvoice=async function(){
+  if(!canManage())return alert('Sin permiso');
+  const provider=(document.getElementById('facProv')?.value.trim())||state.invoiceProvider||'Proveedor';
+  const type=invoiceTypeValue(document.getElementById('facType')?.value||state.invoiceType);
+  if(!state.invoiceDraft.length&&!state.editInvoiceId)return alert('Agrega productos a la factura');
+  const total=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
+  if(state.editInvoiceId&& !state.invoiceDraft.length)return alert('Agrega al menos un producto o borra la factura completa');
+  if(state.editInvoiceId){
+    const idx=state.invoices.findIndex(f=>f.id===state.editInvoiceId);if(idx<0){state.editInvoiceId=null;return alert('Factura no encontrada')}
+    const old=state.invoices[idx],edited={...old,provider,type,items:cloneData(state.invoiceDraft),total,editedAt:Date.now(),editedBy:state.currentUser.name};
+    const problems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);if(problems.length)return alert(stockProblemMessage(problems));
+    applyInvoiceStockLocal(old.items,-1,old.branchId);applyInvoiceStockLocal(edited.items,1,edited.branchId);
+    try{
+      await cloudSaveInventoryRows(inventoryRowsForProductIds([...(new Set([...old.items.map(i=>i.productId),...edited.items.map(i=>i.productId)]))],edited.branchId));
+      await cloudSaveInvoice(invoiceCloudCopy(edited));
+      state.invoices[idx]=edited;state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura editada');
+    }catch(e){
+      applyInvoiceStockLocal(edited.items,-1,edited.branchId);applyInvoiceStockLocal(old.items,1,old.branchId);
+      console.error(e);alert('No se pudo guardar factura en Firebase');
+    }
+    return;
+  }
+  const inv={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),provider,type,items:cloneData(state.invoiceDraft),total,createdAt:Date.now()};
+  applyInvoiceStockLocal(inv.items,1,inv.branchId);
+  try{
+    await cloudSaveInventoryRows(inventoryRowsForInvoiceItems(inv.items,inv.branchId));
+    await cloudSaveInvoice(invoiceCloudCopy(inv));
+    state.invoices.push(inv);state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura ingresada');
+  }catch(e){
+    applyInvoiceStockLocal(inv.items,-1,inv.branchId);
+    console.error(e);alert('No se pudo guardar factura en Firebase');
+  }
+}
+closeShift=async function(){
+  if(isOwner())return alert('Dueño solo lectura');
+  const fuelEl=document.getElementById('fuelInput');if(fuelEl)setFuelDraft(fuelEl.value);
+  const sm=summary(daySales(state.activeDate)),fuel=Number(getFuelDraft()||0);
+  const closure={id:`${branchId()}_${state.activeDate}`,branchId:branchId(),date:state.activeDate,time:nowTime(),user:state.currentUser.name,sales:sm.sales,cost:sm.cost,profit:sm.profit,fuelExpense:fuel,realProfit:sm.profit-fuel,orders:sm.orders,payments:{efectivo:sm.ef,transferencia:sm.tr,transbank:sm.tb},createdAt:Date.now()};
+  try{
+    await cloudSaveClosure(closure);
+    state.closures=state.closures.filter(c=>!(c.branchId===branchId()&&c.date===state.activeDate));
+    state.closures.push(closure);setTurnOpen(false);saveLocal();renderTurno();toast('Turno cerrado');
+  }catch(e){
+    console.error(e);alert('No se pudo guardar el cierre en Firebase');
+  }
+}
+
+async function cloudCommitInventoryCapitalReset(rows,reset){
+  if(!canUseFirebase())throw new Error('Firebase no disponible');
+  const f=window.FONO_FIREBASE;
+  const batch=f.writeBatch(f.db);
+  (rows||[]).forEach(r=>{
+    batch.set(f.doc(f.db,'inventory',`${r.branchId}_${r.productId}`),{
+      ...r,
+      updatedAt:f.serverTimestamp()
+    });
+  });
+  batch.set(f.doc(f.db,'capitalResets',reset.id),{
+    ...reset,
+    updatedAt:f.serverTimestamp()
+  });
+  await batch.commit();
+}
+async function resetInventoryAndCapital(){
+  if(!canManage())return alert('Solo administrador puede usar este reset');
+  const bid=branchId();
+  if(bid==='all')return alert('Elige una sucursal especifica. No se permite resetear todas juntas.');
+  if(!canUseFirebase())return alert('Firebase no esta disponible. No se puede hacer reset seguro.');
+  if(!confirm(`Esto dejara en cero inventario y capital de ${branchName(bid)}. Las ventas historicas no se borran. Continuar?`))return;
+  const typed=prompt('Escribe RESET para confirmar');
+  if(typed!=='RESET')return alert('Reset cancelado');
+  seedInventory();
+  const rows=state.inventory.filter(r=>r.branchId===bid);
+  const backupRows=cloneData(rows);
+  const backupResets=cloneData(state.capitalResets||[]);
+  const createdAt=Date.now();
+  const reset={id:`${bid}_${createdAt}`,branchId:bid,date:state.activeDate,time:nowTime(),user:state.currentUser.name,type:'inventoryCapitalReset',createdAt,rows:rows.length};
+  rows.forEach(r=>{
+    r.stock=0;
+    r.cost=0;
+    r.min=0;
+    r.resetAt=createdAt;
+    r.resetBy=state.currentUser.name;
+  });
+  state.capitalResets.push(reset);
+  try{
+    await cloudCommitInventoryCapitalReset(rows,reset);
+    saveLocal();
+    render();
+    toast('Inventario y capital reiniciados');
+  }catch(e){
+    backupRows.forEach(b=>{
+      const r=inventoryRow(b.productId,b.branchId);
+      if(r)Object.assign(r,b);
+    });
+    state.capitalResets=backupResets;
+    console.error(e);
+    alert('No se pudo hacer el reset en Firebase. No se aplicaron cambios locales.');
+  }
+}
+
 function renderAdmin(){const all=summary(state.sales);document.getElementById('view-admin').innerHTML=`<div class="grid3"><div class="card"><h3>Venta total</h3><div class="stat">${clp(all.sales)}</div></div><div class="card"><h3>Costo total</h3><div class="stat">${clp(all.cost)}</div></div><div class="card"><h3>Ganancia total</h3><div class="stat">${clp(all.profit)}</div></div></div><div class="card" style="margin-top:14px"><h3>Por sucursal</h3>${state.branches.map(b=>{const s=summary(branchSales(b.id));return `<div class="item between"><span>${b.name}</span><b>${clp(s.sales)}</b></div>`}).join('')}</div>`}
 function exportCSV(){toast('Exportar Excel se activará en la versión Firebase/GitHub')}
 
 loadLocal();initLogin();
 window.setDashboardDate=setDashboardDate;window.updateProductPrice=updateProductPrice;window.login=login;window.logout=logout;window.setView=setView;window.setDashboardPeriod=setDashboardPeriod;window.addProductToCart=addProductToCart;window.removeCart=removeCart;window.cancelCart=cancelCart;window.saveSale=saveSale;window.setLibroDate=setLibroDate;window.setRepDate=setRepDate;window.setMonthNav=setMonthNav;window.editSale=editSale;window.deleteSale=deleteSale;window.adjustInventory=adjustInventory;window.addInvoiceItem=addInvoiceItem;window.removeInvoiceItem=removeInvoiceItem;window.cancelInvoiceDraft=cancelInvoiceDraft;window.editInvoice=editInvoice;window.deleteInvoice=deleteInvoice;window.saveInvoice=saveInvoice;window.addCategory=addCategory;window.addProductManual=addProductManual;window.addUser=addUser;window.addCourier=addCourier;window.closeShift=closeShift;window.openNewDay=openNewDay;window.reopenSameDay=reopenSameDay;window.exportCSV=exportCSV;window.cloudBackupAll=cloudBackupAll;
+window.selectInvoiceProduct=selectInvoiceProduct;
+window.deleteCourier=deleteCourier;
+window.resetInventoryAndCapital=resetInventoryAndCapital;
 </script>
 </body>
 </html>
