@@ -72,6 +72,7 @@ input,select,button{font:inherit}label{display:block;font-size:12px;color:var(--
     <section id="view-capital" class="view hidden"></section>
     <section id="view-facturas" class="view hidden"></section>
     <section id="view-repartidores" class="view hidden"></section>
+    <section id="view-controlRep" class="view hidden"></section>
     <section id="view-inventario" class="view hidden"></section>
     <section id="view-productos" class="view hidden"></section>
     <section id="view-usuarios" class="view hidden"></section>
@@ -84,7 +85,7 @@ input,select,button{font:inherit}label{display:block;font-size:12px;color:var(--
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp, writeBatch
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp, writeBatch, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -109,6 +110,7 @@ window.FONO_FIREBASE = {
   deleteDoc,
   serverTimestamp,
   writeBatch,
+  runTransaction,
   ready: true
 };
 
@@ -224,6 +226,7 @@ const BASE_PRODUCTS=[{id:'beer_silver',name:'Silver',category:'Cervezas',salePri
     {id:'b12',name:'Gatorade',category:'Bebidas',salePrice:3500,type:'simple',active:true,trackStock:true},
     {id:'b13',name:'Jugo Piña',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
     {id:'b14',name:'Jugo Durazno',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
+    {id:'b16',name:'Canada Dry Ginger Ale 1.5lt',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
     {id:'rb1',name:'RedBull Normal',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
     {id:'rb2',name:'RedBull Roja',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
     {id:'rb3',name:'RedBull Amarilla',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
@@ -266,10 +269,10 @@ const BASE_USERS=[
 const state={
   currentUser:null,view:'dashboard',
   activeDate:todayDMY(),selectedHistoryDate:todayDMY(),selectedCourierDate:todayDMY(),selectedMonth:monthKey(todayDMY()),dashboardPeriod:'dia',
-  selectedBranchId:'conce',turnOpen:true,category:'Piscos',query:'',invCategory:'Piscos',invQuery:'',facCategory:'Piscos',facQuery:'',prodCategory:'Piscos',prodQuery:'',selectedLibroCourierId:'',
+  selectedBranchId:'conce',turnOpen:true,category:'Piscos',query:'',invCategory:'Piscos',invQuery:'',facCategory:'Piscos',facQuery:'',prodCategory:'Piscos',prodQuery:'',controlRepCategory:'Piscos',controlRepQuery:'',controlRepCourierId:'',selectedLibroCourierId:'',
   cart:[],editSaleId:null,invoiceDraft:[],editInvoiceId:null,invoiceType:'reposicion',paymentMode:'efectivo',mixEf:0,mixTr:0,mixTb:0,selectedCourierId:'',fuelExpense:'',branchTemp:{},
   branches:BRANCHES,users:BASE_USERS,categories:BASE_CATEGORIES,products:normalizeProducts(BASE_PRODUCTS),
-  inventory:[],sales:[],invoices:[],closures:[],capitalResets:[],
+  inventory:[],sales:[],invoices:[],closures:[],capitalResets:[],monthlyExpenses:[],courierMovements:[],
   couriers:[
     {id:'rep_nicolas',name:'Nicolás López',branchId:'conce',active:true},
     {id:'rep_leonardo',name:'Leonardo',branchId:'conce',active:true},
@@ -279,6 +282,28 @@ const state={
   ]
 };
 
+const COURIER_BASE_LOAD=[
+  ['b8',2],['b10',2],['b9',2],['b3',3],['b1',3],['b2',2],['b6',1],['b5',1],['b15',1],['b16',1],['b4',1],['b12',1],
+  ['pisco_mistral',4],['pisco_alto',2],
+  ['pisco_manzana',2],['pisco_barrica',1],['pisco_40',1],
+  ['wh_jony_rojo',2],['wh_jack_manzana',1],['wh_jack_negro',1],['wh_jack_miel',1],
+  ['wh_blenders_miel',1],['wh_blenders_manzana',1],['wh_ballantines',1],['wh_jony_negro',1],
+  ['liq_ron_blanco',1],['liq_ron_havana',1],['liq_vodka_black',1],['liq_tequila',1],['liq_ramazzotti',1],['liq_jagger',1],['liq_absolut',1],['liq_bombay',1],
+  ['wine_export',1],['wine_gato',1],['wine_casillero',1],['wine_esp_moscato',1],['wine_esp_brut',1],
+  ['cock_pisco_sour',1],['cock_mango_sour',1],['cock_toffee',1],['cock_pina_colada',1],['cock_capel_ice',2],['cock_mistral_ice',1],['cock_mistral_energy',1],
+  ['beer_silver',4],['beer_cristal',4],['beer_royal',4],['beer_corona',4],['beer_bud',2],['beer_heineken',2],['beer_austral',1],['beer_kunstmann',1],
+  ['e3',1],['e2',1],['rb1',4],['rb2',2],['rb3',2],
+  ['cig_lucky_click',3],['cig_lucky_berries',3],['cig_lucky_naranja',3],['cig_kent_manzana',3],['cig_kent_rosado',3],['cig_pallmall_click',3],['cig_pallmall_azul',3],['cig_americanos',5]
+];
+const COURIER_PRODUCT_ALIASES={
+  b15:['Jugo Naranja 1.5lt','Jugo de Naranja 1.5lt','Jugo Naranja','Jugo de Naranja'],
+  b16:['Canada Dry Ginger Ale 1.5lt','Canada Dry','Ginger Ale','Ginger'],
+  pisco_nobel_manzana:['Nobel Manzana','Mistral Manzana'],
+  pisco_nobel_barricas:['Nobel Barricas','Nobel Barrica','Mistral Barrica'],
+  pisco_nobel_40:['Nobel 40','Mistral 40']
+};
+const LEGACY_DUPLICATE_PRODUCT_IDS=new Set(['pisco_nobel_manzana','pisco_nobel_barricas','pisco_nobel_40','b15']);
+
 function normalizeProducts(list){
   return (list||[]).filter(p=>p&&p.name).map(p=>({
     id:String(p.id||uid()),name:String(p.name||''),category:String(p.category||'Otros'),
@@ -286,6 +311,52 @@ function normalizeProducts(list){
     drinkSize:p.drinkSize||'',baseProductId:p.baseProductId||'',specialProductId:p.specialProductId||'',
     availableBranches:p.availableBranches||null,isVariablePrice:!!p.isVariablePrice
   }));
+}
+function normProductName(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\b(lt|lts|litro|litros)\b/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+}
+function fixTextEncoding(v){
+  if(typeof v!=='string')return v;
+  const reps=[
+    ['\u00c2\u00b7','·'],['\u00c2\u00bf','¿'],['\u00c2\u00a1','¡'],
+    ['\u00c3\u00a1','á'],['\u00c3\u00a9','é'],['\u00c3\u00ad','í'],['\u00c3\u00b3','ó'],['\u00c3\u00ba','ú'],['\u00c3\u00b1','ñ'],['\u00c3\u00bc','ü'],
+    ['\u00c3\u0081','Á'],['\u00c3\u0089','É'],['\u00c3\u008d','Í'],['\u00c3\u0093','Ó'],['\u00c3\u009a','Ú'],['\u00c3\u0091','Ñ'],
+    ['\u00e2\u2020\u0090','←'],['\u00e2\u2020\u2019','→'],['\u00e2\u0161\u00a0','⚠'],
+    ['Contrase?a','Contraseña'],['Due?o','Dueño'],['due?o','dueño'],['d?a','día'],['D?a','Día'],
+    ['r?pida','rápida'],['C?cteles','Cócteles'],['Pi?a','Piña'],['Concepci?n','Concepción'],
+    ['?ngeles','Ángeles'],['Chill?n','Chillán'],['Nicol?s','Nicolás'],['L?pez','López'],['Guzm?n','Guzmán'],
+    ['carg?','cargó'],['cr?tico','crítico'],['m?nimo','mínimo'],['M?nimo','Mínimo'],['m?n','mín'],
+    ['m?s','más'],['Atr?s','Atrás'],['autom?tico','automático'],['a?n','aún'],['edici?n','edición'],
+    ['encontr?','encontró'],['activ?','activó'],['versi?n','versión'],['categor?a','categoría'],
+    ['Categor?a','Categoría'],['Energ?ticas','Energéticas'],['Acci?n','Acción']
+  ];
+  let out=v;
+  reps.forEach(([bad,good])=>{out=out.split(bad).join(good)});
+  return out;
+}
+function repairTextEncodingDeep(v){
+  if(typeof v==='string')return fixTextEncoding(v);
+  if(Array.isArray(v))return v.map(repairTextEncodingDeep);
+  if(v&&typeof v==='object'){
+    Object.keys(v).forEach(k=>{v[k]=repairTextEncodingDeep(v[k])});
+  }
+  return v;
+}
+function repairStateTextEncoding(){
+  ['users','branches','categories','products','couriers','sales','invoices','closures','courierMovements'].forEach(k=>repairTextEncodingDeep(state[k]));
+}
+function ensureBaseProductsPresent(){
+  state.products=(state.products||[]).filter(p=>!LEGACY_DUPLICATE_PRODUCT_IDS.has(p.id));
+  const existing=new Set((state.products||[]).map(p=>p.id));
+  const existingNames=new Set((state.products||[]).map(p=>normProductName(p.name)));
+  normalizeProducts(BASE_PRODUCTS).forEach(p=>{
+    const nameKey=normProductName(p.name);
+    if(!existing.has(p.id)&&!existingNames.has(nameKey)){
+      state.products.push(p);
+      existing.add(p.id);
+      existingNames.add(nameKey);
+    }
+  });
 }
 function seedInventory(){
   const index=new Set(state.inventory.map(r=>r.branchId+'|'+r.productId));
@@ -332,7 +403,10 @@ async function cloudLoadConfig(){
     if(Array.isArray(d.categories)&&d.categories.length) state.categories=d.categories;
     if(Array.isArray(d.products)&&d.products.length) state.products=normalizeProducts(d.products);
     if(Array.isArray(d.couriers)&&d.couriers.length) state.couriers=d.couriers;
+    repairStateTextEncoding();
+    ensureBaseProductsPresent();
   }else{
+    ensureBaseProductsPresent();
     await cloudSaveConfig();
   }
 }
@@ -345,8 +419,7 @@ async function cloudSaveInventoryRow(row){
   });
 }
 async function cloudSaveAllInventory(){
-  if(!canUseFirebase()) return;
-  await Promise.all((state.inventory||[]).map(r=>cloudSaveInventoryRow(r)));
+  console.warn('cloudSaveAllInventory bloqueado: usar movimientos por transaccion para evitar pisar inventario viejo.');
 }
 async function cloudLoadInventory(){
   if(!canUseFirebase()) return;
@@ -398,6 +471,22 @@ async function cloudSaveCapitalReset(reset){
     updatedAt:f.serverTimestamp()
   });
 }
+async function cloudSaveMonthlyExpense(row){
+  if(!canUseFirebase() || !row) return;
+  const f=window.FONO_FIREBASE;
+  await f.setDoc(f.doc(f.db,'monthlyExpenses',row.id),{
+    ...row,
+    updatedAt:f.serverTimestamp()
+  });
+}
+async function cloudSaveCourierMovement(row){
+  if(!canUseFirebase() || !row) return;
+  const f=window.FONO_FIREBASE;
+  await f.setDoc(f.doc(f.db,'courierMovements',row.id),{
+    ...row,
+    updatedAt:f.serverTimestamp()
+  });
+}
 async function cloudLoadCollection(name){
   if(!canUseFirebase()) return [];
   const f=window.FONO_FIREBASE;
@@ -417,6 +506,8 @@ async function cloudLoadAll(){
     state.invoices=[];
     state.closures=[];
     state.capitalResets=[];
+    state.monthlyExpenses=[];
+    state.courierMovements=[];
     state.cart=[];
     state.invoiceDraft=[];
     state.editSaleId=null;
@@ -447,16 +538,21 @@ async function cloudLoadAll(){
     await cloudLoadConfig();
     seedInventory();
     await cloudLoadInventory();
-    const [sales,invoices,closures,capitalResets]=await Promise.all([
+    const [sales,invoices,closures,capitalResets,monthlyExpenses,courierMovements]=await Promise.all([
       cloudLoadCollection('sales'),
       cloudLoadCollection('invoices'),
       cloudLoadCollection('closures'),
-      cloudLoadCollection('capitalResets')
+      cloudLoadCollection('capitalResets'),
+      cloudLoadCollection('monthlyExpenses'),
+      cloudLoadCollection('courierMovements')
     ]);
     state.sales=Array.isArray(sales)?sales:[];
     state.invoices=Array.isArray(invoices)?invoices:[];
     state.closures=Array.isArray(closures)?closures:[];
     state.capitalResets=Array.isArray(capitalResets)?capitalResets:[];
+    state.monthlyExpenses=Array.isArray(monthlyExpenses)?monthlyExpenses:[];
+    state.courierMovements=Array.isArray(courierMovements)?courierMovements:[];
+    repairStateTextEncoding();
     seedInventory();
     saveLocal();
     toast('Datos cargados desde Firebase');
@@ -474,7 +570,9 @@ async function cloudBackupAll(){
       ...(state.sales||[]).map(s=>cloudSaveSale(s)),
       ...(state.invoices||[]).map(i=>cloudSaveInvoice(i)),
       ...(state.closures||[]).map(c=>cloudSaveClosure(c)),
-      ...(state.capitalResets||[]).map(r=>cloudSaveCapitalReset(r))
+      ...(state.capitalResets||[]).map(r=>cloudSaveCapitalReset(r)),
+      ...(state.monthlyExpenses||[]).map(r=>cloudSaveMonthlyExpense(r)),
+      ...(state.courierMovements||[]).map(r=>cloudSaveCourierMovement(r))
     ]);
   }catch(e){
     console.error('Error backup Firebase',e);
@@ -497,8 +595,12 @@ function loadLocal(){
   if(!Array.isArray(state.invoices))state.invoices=[];
   if(!Array.isArray(state.closures))state.closures=[];
   if(!Array.isArray(state.capitalResets))state.capitalResets=[];
+  if(!Array.isArray(state.monthlyExpenses))state.monthlyExpenses=[];
+  if(!Array.isArray(state.courierMovements))state.courierMovements=[];
   if(!Array.isArray(state.inventory))state.inventory=[];
   if(!state.branchTemp) state.branchTemp={};
+  repairStateTextEncoding();
+  ensureBaseProductsPresent();
   state.activeDate=todayDMY();
   state.selectedHistoryDate=state.activeDate;
   state.selectedCourierDate=state.activeDate;
@@ -546,12 +648,14 @@ function isAdmin(){return state.currentUser&&state.currentUser.role==='admin'}
 function isOperator(){return state.currentUser&&state.currentUser.role==='operador'}
 function canSell(){return isAdmin()||isOperator()}
 function canManage(){return isAdmin()}
+function canControlCouriers(){return isAdmin()||isOperator()}
 function canEditDailyOrders(){return isAdmin()||isOperator()}
+function canEditPasswords(){return isOwner()}
 function canSeeFinancial(){return isOwner()||isAdmin()}
 function visible(view){
-  if(isOwner())return ['dashboard','libro','mayor','capital','facturas','repartidores','inventario','productos','usuarios','turno','admin'].includes(view);
-  if(isAdmin())return ['dashboard','venta','libro','mayor','capital','facturas','repartidores','inventario','productos','usuarios','turno'].includes(view);
-  if(isOperator())return ['venta','libro','repartidores','inventario','turno'].includes(view);
+  if(isOwner())return ['dashboard','libro','mayor','capital','facturas','repartidores','controlRep','inventario','productos','usuarios','turno','admin'].includes(view);
+  if(isAdmin())return ['dashboard','venta','libro','mayor','capital','facturas','repartidores','controlRep','inventario','productos','usuarios','turno'].includes(view);
+  if(isOperator())return ['venta','libro','repartidores','controlRep','inventario','turno'].includes(view);
   return false;
 }
 function product(id){return state.products.find(p=>p.id===id)}
@@ -563,6 +667,30 @@ function daySales(date=state.activeDate,bid=branchId()){return branchSales(bid).
 function monthSales(mk=state.selectedMonth,bid=branchId()){return branchSales(bid).filter(s=>monthKey(s.date)===mk)}
 function monthInvoices(mk=state.selectedMonth,bid=branchId()){return state.invoices.filter(i=>(bid==='all'||i.branchId===bid)&&monthKey(i.date)===mk)}
 function monthClosures(mk=state.selectedMonth,bid=branchId()){return state.closures.filter(c=>(bid==='all'||c.branchId===bid)&&monthKey(c.date)===mk)}
+function monthlyExpenseId(mk=state.selectedMonth,bid=branchId()){return `${bid}_${mk}`}
+function emptyMonthlyExpense(mk=state.selectedMonth,bid=branchId()){
+  return {id:monthlyExpenseId(mk,bid),branchId:bid,month:mk,iva:0,salaries:[0,0,0,0,0],misc:[0,0],updatedAtLocal:0};
+}
+function monthlyExpenseRow(mk=state.selectedMonth,bid=branchId()){
+  if(bid==='all'){
+    const rows=state.monthlyExpenses.filter(r=>r.month===mk);
+    return rows.reduce((a,r)=>{
+      a.iva+=Number(r.iva||0);
+      (r.salaries||[]).forEach((v,i)=>a.salaries[i]=(a.salaries[i]||0)+Number(v||0));
+      (r.misc||[]).forEach((v,i)=>a.misc[i]=(a.misc[i]||0)+Number(v||0));
+      return a;
+    },emptyMonthlyExpense(mk,bid));
+  }
+  let row=state.monthlyExpenses.find(r=>r.id===monthlyExpenseId(mk,bid));
+  if(!row){
+    row=emptyMonthlyExpense(mk,bid);
+    state.monthlyExpenses.push(row);
+  }
+  if(!Array.isArray(row.salaries))row.salaries=[0,0,0,0,0];
+  if(!Array.isArray(row.misc))row.misc=[0,0];
+  return row;
+}
+function monthlyExpenseTotal(row){return Number(row.iva||0)+(row.salaries||[]).reduce((a,v)=>a+Number(v||0),0)+(row.misc||[]).reduce((a,v)=>a+Number(v||0),0)}
 function inventoryValue(bid=branchId()){return state.inventory.filter(r=>bid==='all'||r.branchId===bid).reduce((a,r)=>a+Number(r.stock||0)*Number(r.cost||0),0)}
 function periodPayments(list){return list.reduce((a,s)=>{a.efectivo+=Number(s.payments?.efectivo||0);a.transferencia+=Number(s.payments?.transferencia||0);a.transbank+=Number(s.payments?.transbank||0);return a},{efectivo:0,transferencia:0,transbank:0})}
 function paymentText(s){const p=s.payments||{},parts=[];if(Number(p.efectivo||0)>0)parts.push(`Efectivo ${clp(p.efectivo)}`);if(Number(p.transferencia||0)>0)parts.push(`Transferencia ${clp(p.transferencia)}`);if(Number(p.transbank||0)>0)parts.push(`Transbank ${clp(p.transbank)}`);return parts.join(' · ')||String(s.paymentMode||'Sin pago')}
@@ -582,6 +710,13 @@ function afterCapitalReset(rows,bid=branchId()){
   const cutoff=Number(reset?.createdAt||0);
   if(!cutoff)return rows||[];
   return (rows||[]).filter(r=>Number(r.createdAt||0)>cutoff);
+}
+function branchResetCutoff(bid=branchId()){
+  return Number(lastCapitalReset(bid)?.createdAt||0);
+}
+function rowAfterBranchReset(row,bid=branchId()){
+  const cutoff=branchResetCutoff(bid);
+  return !cutoff||Number(row?.createdAt||0)>cutoff;
 }
 function capitalInvoicesForMonth(mk=state.selectedMonth,bid=branchId()){
   return afterCapitalReset(monthInvoices(mk,bid),bid);
@@ -613,7 +748,19 @@ function initLogin(){
   document.getElementById('loginPass').onkeydown=e=>{if(e.key==='Enter')login()};
 }
 async function login(){
-  const id=document.getElementById('loginUser').value,pass=document.getElementById('loginPass').value.trim();
+  const sel=document.getElementById('loginUser');
+  const id=sel.value,pass=document.getElementById('loginPass').value.trim();
+  try{
+    const ok=await waitFirebaseReady();
+    if(ok){
+      await cloudLoadConfig();
+      saveLocal();
+      initLogin();
+      document.getElementById('loginUser').value=id;
+    }
+  }catch(e){
+    console.error('No se pudo actualizar usuarios antes del login',e);
+  }
   const u=state.users.find(x=>x.id===id);
   if(!u)return alert('Selecciona usuario');
   if(pass!==String(u.password))return alert('Clave incorrecta');
@@ -636,7 +783,33 @@ function setActiveDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.s
 function setMonth(v){state.selectedMonth=v;saveLocal();render()}
 function setDashboardPeriod(v){state.dashboardPeriod=v;saveLocal();renderDashboard()}
 function setDashboardDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.selectedCourierDate=v;state.selectedMonth=monthKey(v);saveLocal();render()}
-function dashboardSales(){const list=branchSales();if(state.dashboardPeriod==='dia')return list.filter(s=>s.date===state.activeDate);if(state.dashboardPeriod==='semana'){const end=parseDMY(state.activeDate),start=new Date(end);start.setDate(end.getDate()-6);return list.filter(s=>{const d=parseDMY(s.date);return d>=start&&d<=end})}if(state.dashboardPeriod==='mes')return list.filter(s=>monthKey(s.date)===state.selectedMonth);return list}
+function dashboardRange(){
+  const end=parseDMY(state.activeDate),start=new Date(end);
+  if(state.dashboardPeriod==='semana')start.setDate(end.getDate()-6);
+  else if(state.dashboardPeriod==='mes')start.setDate(1);
+  return {start,end};
+}
+function inDashboardRange(date){
+  const {start,end}=dashboardRange(),d=parseDMY(date);
+  return d>=start&&d<=end;
+}
+function dashboardSales(){return branchSales().filter(s=>inDashboardRange(s.date))}
+function dashboardClosures(){
+  const rows=branchId()==='all'?state.closures.slice():state.closures.filter(c=>c.branchId===branchId());
+  return rows.filter(c=>inDashboardRange(c.date));
+}
+function dashboardFlowData(){
+  const {start,end}=dashboardRange(),sales=dashboardSales(),out=[];
+  for(const d=new Date(start);d<=end;d.setDate(d.getDate()+1)){
+    const date=fmtDMY(d),list=sales.filter(s=>s.date===date),sum=summary(list);
+    out.push({date,label:date.slice(0,5),sales:sum.sales,orders:sum.orders});
+  }
+  return out;
+}
+function renderSalesFlowChart(){
+  const rows=dashboardFlowData(),max=Math.max(1,...rows.map(r=>Number(r.sales||0)));
+  return `<div class="card" style="margin-top:14px"><h3>Gráfico flujo de ventas</h3><div class="muted small" style="margin-bottom:10px">Desde ${rows[0]?.date||state.activeDate} hasta ${rows[rows.length-1]?.date||state.activeDate}</div><div style="overflow:auto;padding-bottom:4px"><div style="display:flex;align-items:flex-end;gap:8px;height:230px;min-width:${Math.max(360,rows.length*52)}px;border-left:1px solid var(--border);border-bottom:1px solid var(--border);padding:10px 8px 0">${rows.map(r=>{const h=Math.max(4,Math.round(Number(r.sales||0)/max*180));return `<div style="width:44px;text-align:center"><div class="small bold">${r.sales?clp(r.sales):''}</div><div title="${r.date} · ${clp(r.sales)} · ${r.orders} pedidos" style="height:${h}px;background:var(--orange);border-radius:8px 8px 0 0"></div><div class="small muted">${r.label}</div><div class="small">${r.orders}</div></div>`}).join('')}</div></div></div>`;
+}
 function topProducts(list,limit=10){const m={};list.forEach(s=>(s.items||[]).forEach(i=>{if(!m[i.name])m[i.name]={name:i.name,qty:0,total:0};m[i.name].qty+=Number(i.qty||0);m[i.name].total+=Number(i.salePrice||0)*Number(i.qty||0)}));return Object.values(m).sort((a,b)=>b.qty-a.qty||b.total-a.total).slice(0,limit)}
 
 function render(){
@@ -646,11 +819,13 @@ function render(){
     ? `${branchName()} · Fecha activa ${state.activeDate}<div style="margin-top:8px;max-width:340px"><label>Sucursal activa</label><select class="input" onchange="state.selectedBranchId=this.value;setTurnOpen(getTurnOpen());setSelectedCourier((couriers()[0]||{}).id||'');saveLocal();render()"><option value="all" ${state.selectedBranchId==='all'?'selected':''}>Todas</option>${state.branches.map(b=>`<option value="${b.id}" ${state.selectedBranchId===b.id?'selected':''}>${b.name}</option>`).join('')}</select></div>`
     : `${branchName()} · Fecha activa ${state.activeDate}`;
   const menuItems=[['dashboard','Dashboard'],['venta','Venta rápida'],['libro','Libro diario'],['mayor','Libro mayor'],['capital','Control capital'],['facturas','Facturas entrantes'],['repartidores','Repartidores'],['inventario','Inventario'],['productos','Productos'],['usuarios','Usuarios'],['turno','Turno'],['admin','Vista dueño']];
+  menuItems.splice(7,0,['controlRep','Control productos repartidor']);
   document.getElementById('menu').innerHTML=menuItems.filter(x=>visible(x[0])).map(([k,l])=>`<button class="${state.view===k?'active':''}" onclick="setView('${k}')">${l}</button>`).join('');
   if(!visible(state.view))state.view=visible('dashboard')?'dashboard':'venta';
   const ds=daySales(state.activeDate),sm=summary(ds);
   document.getElementById('kpiSales').textContent=clp(sm.sales);document.getElementById('kpiOrders').textContent=sm.orders;document.getElementById('kpiDate').textContent=state.activeDate;document.getElementById('kpiTurn').textContent=getTurnOpen()?'Abierto':'Cerrado';
   document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));document.getElementById('view-'+state.view).classList.remove('hidden');
+  if(state.view==='controlRep'){renderControlRepartidor();saveLocal();return}
   ({dashboard:renderDashboard,venta:renderVenta,libro:renderLibro,mayor:renderMayor,capital:renderCapital,facturas:renderFacturas,repartidores:renderRepartidores,inventario:renderInventario,productos:renderProductos,usuarios:renderUsuarios,turno:renderTurno,admin:renderAdmin}[state.view]||renderDashboard)();
   saveLocal();
 }
@@ -661,17 +836,30 @@ function navMonth(current,cb){return `<div class="row" style="margin-bottom:12px
 function renderDashboard(){
   const list=dashboardSales(),sm=summary(list),pay=periodPayments(list),totalPay=pay.efectivo+pay.transferencia+pay.transbank,top=topProducts(list,10);
   const low=state.inventory.filter(r=>(branchId()==='all'||r.branchId===branchId())&&Number(r.min)>0&&Number(r.stock)<=Number(r.min)).map(r=>({...r,p:product(r.productId)}));
-  const fuel=state.dashboardPeriod==='mes'?monthClosures(state.selectedMonth).reduce((a,c)=>a+Number(c.fuelExpense||0),0):0,profit=sm.profit-fuel;
+  const fuel=state.dashboardPeriod==='mes'?dashboardClosures().reduce((a,c)=>a+Number(c.fuelExpense||0),0):0,profit=sm.profit-fuel;
   document.getElementById('view-dashboard').innerHTML=`
   <div class="card" style="margin-bottom:14px"><h3>Dashboard</h3><div class="row"><button class="btn ${state.dashboardPeriod==='dia'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('dia')">Día</button><button class="btn ${state.dashboardPeriod==='semana'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('semana')">Semana</button><button class="btn ${state.dashboardPeriod==='mes'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('mes')">Mes</button></div><div style="margin-top:12px">${navDate(state.activeDate,'setDashboardDate')}</div></div>
   ${low.length&&!isOperator()?`<div class="card danger-card" style="margin-bottom:14px"><h3>⚠ Stock crítico</h3><div class="list">${low.map(x=>`<div class="item between"><span>${x.p?.name||x.productId}</span><b class="red">${x.stock} / mín ${x.min}</b></div>`).join('')}</div></div>`:''}
   <div class="grid3"><div class="card"><h3>Ventas</h3><div class="stat">${clp(sm.sales)}</div></div><div class="card"><h3>Pedidos</h3><div class="stat">${sm.orders}</div></div><div class="card"><h3>Ticket promedio</h3><div class="stat">${clp(sm.orders?Math.round(sm.sales/sm.orders):0)}</div></div>
   ${canSeeFinancial()?`<div class="card"><h3>Costo vendido</h3><div class="stat">${clp(sm.cost)}</div></div><div class="card"><h3>Ganancia</h3><div class="stat">${clp(profit)}</div></div><div class="card"><h3>Margen</h3><div class="stat">${percent(profit,sm.sales)}%</div></div><div class="card"><h3>Inventario valorizado</h3><div class="stat">${clp(inventoryValue())}</div></div><div class="card"><h3>Capital pendiente</h3><div class="stat">${clp(pendingCapitalForMonth())}</div></div>`:''}</div>
+  ${renderSalesFlowChart()}
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Top 10 productos más vendidos</h3><div class="list">${top.map((x,i)=>`<div class="item between"><span><b>${i+1}. ${x.name}</b><div class="muted small">${x.qty} unidades</div></span><b>${clp(x.total)}</b></div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Medios de pago</h3><div class="item between"><span>Efectivo</span><b>${clp(pay.efectivo)} · ${percent(pay.efectivo,totalPay)}%</b></div><div class="item between"><span>Transferencia</span><b>${clp(pay.transferencia)} · ${percent(pay.transferencia,totalPay)}%</b></div><div class="item between"><span>Transbank</span><b>${clp(pay.transbank)} · ${percent(pay.transbank,totalPay)}%</b></div></div></div>`;
 }
 
 function activeProducts(){return state.products.filter(p=>p.active!==false&&(!p.availableBranches||p.availableBranches.includes(branchId())||branchId()==='all'))}
-function promoOptions(p){if(p.specialProductId)return [product(p.specialProductId)].filter(Boolean);if(p.drinkSize==='1.5')return state.products.filter(x=>x.active&&x.type==='simple'&&x.category==='Bebidas'&&x.drinkSize==='1.5');if(p.drinkSize==='3')return state.products.filter(x=>x.active&&x.type==='simple'&&x.category==='Bebidas'&&x.drinkSize==='3');return[]}
+function beverageDrinkSize(p){
+  const saved=String(p?.drinkSize||'').trim();
+  if(saved==='1.5'||saved==='3')return saved;
+  const name=normProductName(p?.name);
+  if(name.includes('1 5'))return '1.5';
+  if(name.includes('3')||name.includes('mr big'))return '3';
+  return '';
+}
+function promoOptions(p){
+  if(p.specialProductId)return [product(p.specialProductId)].filter(Boolean);
+  const size=String(p.drinkSize||'').trim();
+  return state.products.filter(x=>x.active!==false&&x.type==='simple'&&x.trackStock!==false&&x.category==='Bebidas'&&beverageDrinkSize(x)===size).sort((a,b)=>String(a.name).localeCompare(String(b.name),'es'));
+}
 function promoComponents(p,drinkId){const comps=[];if(p.baseProductId)comps.push({productId:p.baseProductId,qty:1,costAtSale:getCost(p.baseProductId)});if(p.specialProductId)comps.push({productId:p.specialProductId,qty:1,costAtSale:getCost(p.specialProductId)});else if(drinkId)comps.push({productId:drinkId,qty:1,costAtSale:getCost(drinkId)});const hielo=state.products.find(x=>String(x.name).trim().toLowerCase()==='hielo');if(hielo)comps.push({productId:hielo.id,qty:1,costAtSale:getCost(hielo.id)});return comps}
 function cartSubtotal(){return state.cart.reduce((a,i)=>a+Number(i.salePrice||0)*Number(i.qty||1),0)}
 function transbankFee(){return state.paymentMode==='transbank'||(state.paymentMode==='mixto'&&Number(state.mixTb||0)>0)?(state.cart.length?1000:0):0}
@@ -815,6 +1003,46 @@ function renderMayor(){
   const ts=list.reduce((a,s)=>a+Number(s.total||0),0),tc=list.reduce((a,s)=>a+saleCost(s),0),tf=monthClosures().reduce((a,c)=>a+Number(c.fuelExpense||0),0),tp=ts-tc-tf;
   document.getElementById('view-mayor').innerHTML=`<div class="card"><h3>Libro mayor mensual</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="row" style="justify-content:flex-end;margin-bottom:10px"><button class="btn btn-primary" onclick="exportCSV()">Exportar Excel</button></div><table class="table"><thead><tr><th align="left">Fecha</th><th align="right">Venta</th><th align="right">Costo</th><th align="right">Gasto</th><th align="right">Ganancia</th></tr></thead><tbody>${rows.map(([d,arr])=>{const s=summary(arr),f=state.closures.filter(c=>(branchId()==='all'||c.branchId===branchId())&&c.date===d).reduce((a,c)=>a+Number(c.fuelExpense||0),0);return `<tr><td><b>${d}</b></td><td align="right">${clp(s.sales)}</td><td align="right">${clp(s.cost)}</td><td align="right">${clp(f)}</td><td align="right">${clp(s.profit-f)}</td></tr>`}).join('')}<tr class="total"><td>TOTALES</td><td align="right">${clp(ts)}</td><td align="right">${clp(tc)}</td><td align="right">${clp(tf)}</td><td align="right">${clp(tp)}</td></tr></tbody></table></div>`
 }
+function renderMonthlyExpensesBox(grossProfit){
+  const row=monthlyExpenseRow();
+  const total=monthlyExpenseTotal(row);
+  const net=Number(grossProfit||0)-total;
+  const edit=canManage()&&branchId()!=='all';
+  const input=(kind,idx,label,value)=>edit?`<div><label>${label}</label><input class="input" type="number" value="${Number(value||0)}" onchange="setMonthlyExpense('${kind}',${idx},this.value)"></div>`:`<div class="item between"><span>${label}</span><b>${clp(value)}</b></div>`;
+  return `<div class="card" style="margin-top:14px"><h3>Descuentos para ganancia neta</h3>${branchId()==='all'?'<div class="muted small">Vista total: suma los gastos cargados en cada sucursal.</div>':''}<div class="grid3" style="margin-top:10px">
+    ${input('iva',0,'IVA',row.iva)}
+    ${(row.salaries||[]).slice(0,5).map((v,i)=>input('salary',i,`Sueldo ${i+1}`,v)).join('')}
+    ${(row.misc||[]).slice(0,2).map((v,i)=>input('misc',i,`Gasto varios ${i+1}`,v)).join('')}
+  </div><div class="grid3" style="margin-top:14px">
+    <div class="card"><h4>Ganancia mes</h4><div class="stat">${clp(grossProfit)}</div></div>
+    <div class="card"><h4>Descuentos</h4><div class="stat">${clp(total)}</div></div>
+    <div class="card success-card"><h4>Ganancia neta</h4><div class="stat ${net>=0?'green':'red'}">${clp(net)}</div></div>
+  </div></div>`;
+}
+renderMayor=function(){
+  const list=monthSales(),by={};list.forEach(s=>{by[s.date]=by[s.date]||[];by[s.date].push(s)});const rows=Object.entries(by).sort((a,b)=>parseDMY(a[0])-parseDMY(b[0]));
+  const ts=list.reduce((a,s)=>a+Number(s.total||0),0),tc=list.reduce((a,s)=>a+saleCost(s),0),tf=monthClosures().reduce((a,c)=>a+Number(c.fuelExpense||0),0),tp=ts-tc-tf;
+  document.getElementById('view-mayor').innerHTML=`<div class="card"><h3>Libro mayor mensual</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="row" style="justify-content:flex-end;margin-bottom:10px"><button class="btn btn-primary" onclick="exportCSV()">Exportar Excel</button></div><table class="table"><thead><tr><th align="left">Fecha</th><th align="right">Venta</th><th align="right">Costo</th><th align="right">Gasto</th><th align="right">Ganancia</th></tr></thead><tbody>${rows.map(([d,arr])=>{const s=summary(arr),f=state.closures.filter(c=>(branchId()==='all'||c.branchId===branchId())&&c.date===d).reduce((a,c)=>a+Number(c.fuelExpense||0),0);return `<tr><td><b>${d}</b></td><td align="right">${clp(s.sales)}</td><td align="right">${clp(s.cost)}</td><td align="right">${clp(f)}</td><td align="right">${clp(s.profit-f)}</td></tr>`}).join('')}<tr class="total"><td>TOTALES</td><td align="right">${clp(ts)}</td><td align="right">${clp(tc)}</td><td align="right">${clp(tf)}</td><td align="right">${clp(tp)}</td></tr></tbody></table></div>${renderMonthlyExpensesBox(tp)}`
+}
+async function setMonthlyExpense(kind,idx,value){
+  if(!canManage())return alert('Sin permiso');
+  if(branchId()==='all')return alert('Elige una sucursal para editar gastos');
+  const row=monthlyExpenseRow();
+  if(kind==='iva')row.iva=Number(value||0);
+  if(kind==='salary')row.salaries[idx]=Number(value||0);
+  if(kind==='misc')row.misc[idx]=Number(value||0);
+  row.updatedAtLocal=Date.now();
+  row.updatedBy=state.currentUser?.name||'';
+  try{
+    await cloudSaveMonthlyExpense(row);
+    saveLocal();
+    renderMayor();
+    toast('Gasto mensual guardado');
+  }catch(e){
+    console.error(e);
+    alert('No se pudo guardar gasto mensual en Firebase');
+  }
+}
 function setMonthNav(v){state.selectedMonth=v;render()}
 
 function renderCapital(){
@@ -828,7 +1056,7 @@ function renderCapital(){
   const resetBox=canManage()?`<div class="card danger-card" style="margin-bottom:14px"><h3>Reset inventario / capital</h3><div class="muted small">Uso de emergencia para la sucursal ${branchName()}. Deja inventario, costos y capital controlado en cero desde este momento. No borra ventas historicas ni login.</div>${reset?`<div class="badge" style="margin-top:8px">Ultimo reset: ${reset.date} ${reset.time||''}</div>`:''}<button class="btn btn-danger" style="margin-top:10px" onclick="resetInventoryAndCapital()">Resetear inventario y capital</button></div>`:'';
   document.getElementById('view-capital').innerHTML=`${resetBox}<div class="card"><h3>Control capital / caja</h3>${navMonth(state.selectedMonth,'setMonthNav')}<div class="grid3">
     <div class="card success-card"><h4>Dinero costo que debe haber en caja</h4><div class="stat green">${clp(dineroCostoCaja)}</div><div class="muted small">Costo de los productos vendidos. Plata destinada a reponer lo vendido.</div></div>
-    <div class="card"><h4>Valor inventario en bodega</h4><div class="stat">${clp(valorBodega)}</div><div class="muted small">Mercadería que queda valorizada por costo.</div></div>
+    <div class="card"><h4>Valor inventario en bodega</h4><div class="stat">${clp(valorBodega)}</div><div class="muted small">Mercader?a que queda valorizada por costo.</div></div>
     <div class="card"><h4>Capital controlado</h4><div class="stat">${clp(capitalControlado)}</div><div class="muted small">Bodega + dinero costo recuperado.</div></div>
     
     <div class="card"><h4>Ganancia real mes</h4><div class="stat">${clp(sm.sales-sm.cost-fuel)}</div></div>
@@ -847,6 +1075,205 @@ function renderRepartidores(){
   document.getElementById('view-repartidores').innerHTML=`<div class="grid2"><div class="card"><h3>Repartidores</h3>${navDate(state.selectedCourierDate,'setRepDate')}<div class="grid3">${reps.map(r=>{const arr=list.filter(s=>s.courierId===r.id),sm=summary(arr);return `<div class="card"><h3>${r.name}</h3><div class="badge">${sm.orders} pedidos</div><div class="item between"><span>Efectivo</span><b>${clp(sm.ef)}</b></div><div class="item between"><span>Transfer.</span><b>${clp(sm.tr)}</b></div><div class="item between"><span>Transbank</span><b>${clp(sm.tb)}</b></div><div class="item between"><span>Total</span><b>${clp(sm.sales)}</b></div></div>`}).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Resumen</h3><div class="item between"><span>Pedidos</span><b>${tot.orders}</b></div><div class="item between"><span>Total vendido</span><b>${clp(tot.sales)}</b></div><div class="item between"><span>Efectivo</span><b>${clp(tot.ef)}</b></div><div class="item between"><span>Transferencia</span><b>${clp(tot.tr)}</b></div><div class="item between"><span>Transbank</span><b>${clp(tot.tb)}</b></div></div></div>`
 }
 function setRepDate(v){state.selectedCourierDate=v;renderRepartidores()}
+
+function addQty(map,pid,qty){if(!pid)return;map[pid]=(map[pid]||0)+Number(qty||0)}
+function productIdForBase(pid){
+  if(product(pid))return pid;
+  const base=BASE_PRODUCTS.find(p=>p.id===pid);
+  const keys=[base?.name,...(COURIER_PRODUCT_ALIASES[pid]||[])].map(normProductName).filter(Boolean);
+  if(!keys.length)return pid;
+  const found=state.products.find(p=>{
+    const name=normProductName(p.name);
+    return keys.some(key=>name===key||name.includes(key)||key.includes(name));
+  });
+  return found?.id||pid;
+}
+function selectedControlCourierId(){
+  const list=couriers();
+  if(list.some(c=>c.id===state.controlRepCourierId))return state.controlRepCourierId;
+  return (list[0]||{}).id||'';
+}
+function controlDate(){return state.selectedCourierDate||state.activeDate}
+function courierMovementRows(date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
+  return (state.courierMovements||[]).filter(m=>m.branchId===bid&&m.date===date&&m.courierId===cid&&rowAfterBranchReset(m,bid));
+}
+function courierMovementMap(type,date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
+  const out={};
+  courierMovementRows(date,cid,bid).filter(m=>m.type===type).forEach(m=>addQty(out,m.productId,m.qty));
+  return out;
+}
+function soldMapForCourier(date=controlDate(),cid=selectedControlCourierId(),bid=branchId(),ignoreSaleId=''){
+  const out={};
+  (state.sales||[]).filter(s=>s.branchId===bid&&s.date===date&&s.courierId===cid&&s.id!==ignoreSaleId&&rowAfterBranchReset(s,bid)).forEach(s=>(s.items||[]).forEach(i=>(i.components||[]).forEach(c=>{
+    const wd=s.warehouseDeltas;
+    if(wd&&!Object.prototype.hasOwnProperty.call(wd,c.productId))addQty(out,c.productId,Number(c.qty||0)*Number(i.qty||1));
+  })));
+  return out;
+}
+function defaultCourierProductIds(){return new Set(COURIER_BASE_LOAD.map(([pid])=>productIdForBase(pid)))}
+function isCourierControlledProduct(pid,date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
+  return courierMovementRows(date,cid,bid).some(m=>m.productId===pid&&m.type==='load'&&Number(m.qty||0)>0);
+}
+function courierAvailableMap(date=controlDate(),cid=selectedControlCourierId(),bid=branchId(),ignoreSaleId=''){
+  const loads=courierMovementMap('load',date,cid,bid),returns=courierMovementMap('return',date,cid,bid),sold=soldMapForCourier(date,cid,bid,ignoreSaleId);
+  const ids=new Set([...Object.keys(loads),...Object.keys(returns),...Object.keys(sold),...COURIER_BASE_LOAD.map(([pid])=>productIdForBase(pid))]);
+  const out={};
+  ids.forEach(pid=>out[pid]=Number(loads[pid]||0)-Number(sold[pid]||0)-Number(returns[pid]||0));
+  return out;
+}
+function saleWarehouseDeltasForCourier(sale,ignoreSaleId=''){
+  const req=saleInventoryDeltas(sale.items,1),available=courierAvailableMap(sale.date,sale.courierId,sale.branchId,ignoreSaleId),out={};
+  Object.values(req).forEach(d=>{
+    const qty=Number(d.stockDelta||0),pid=d.productId,p=product(pid);
+    if(isCourierControlledProduct(pid,sale.date,sale.courierId,sale.branchId)){
+      if(Number(available[pid]||0)<qty){
+        const bodega=Number(inventoryRow(pid,sale.branchId)?.stock||0);
+        throw new Error(`Repartidor sin stock cargado: ${p?p.name:pid}. Repartidor disponible ${Number(available[pid]||0)}, requerido ${qty}. Inventario bodega ${bodega}. Si el producto salio a reparto, cargalo primero en Control productos repartidor.`);
+      }
+    }else{
+      addInventoryDelta(out,pid,-qty);
+    }
+  });
+  return out;
+}
+function invertInventoryDeltas(deltas){
+  const out={};
+  Object.values(deltas||{}).forEach(d=>addInventoryDelta(out,d.productId,-Number(d.stockDelta||0),d));
+  return out;
+}
+function courierControlSummary(date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
+  const loads=courierMovementMap('load',date,cid,bid),returns=courierMovementMap('return',date,cid,bid),sold=soldMapForCourier(date,cid,bid);
+  const ids=new Set([...Object.keys(loads),...Object.keys(returns),...Object.keys(sold),...COURIER_BASE_LOAD.map(([pid])=>productIdForBase(pid))]);
+  return [...ids].map(pid=>{
+    const delivered=Number(loads[pid]||0),soldQty=Number(sold[pid]||0),expected=delivered-soldQty,returned=Number(returns[pid]||0),diff=returned-expected;
+    return {productId:pid,delivered,sold:soldQty,expected,returned,diff};
+  }).filter(r=>r.delivered||r.sold||r.returned||defaultCourierProductIds().has(r.productId));
+}
+function baseLoadApplied(date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
+  return courierMovementRows(date,cid,bid).some(m=>m.source==='base');
+}
+function courierBaseRows(){
+  return COURIER_BASE_LOAD.map(([pid,qty])=>({productId:productIdForBase(pid),qty:Number(qty||0)})).filter(r=>product(r.productId));
+}
+async function applyCourierBaseLoad(){
+  if(!canControlCouriers())return alert('Sin permiso');
+  const cid=selectedControlCourierId(),bid=branchId(),date=controlDate();
+  if(!cid)return alert('Elige repartidor');
+  if(baseLoadApplied(date,cid,bid))return alert('La carga base ya fue aplicada a este repartidor en esta fecha');
+  const c=state.couriers.find(x=>x.id===cid)||{};
+  const movements=courierBaseRows().map(({productId,qty})=>({id:`${bid}_${date}_${cid}_base_${productId}`,branchId:bid,date,courierId:cid,courierName:c.name||cid,productId,qty:Number(qty||0),type:'load',source:'base',time:nowTime(),user:state.currentUser.name,createdAt:Date.now()}));
+  try{
+    const result=await cloudCommitCourierBaseLoadPartial(bid,movements);
+    if(result.movements.length)state.courierMovements.push(...result.movements);
+    saveLocal();renderControlRepartidor();
+    if(!result.movements.length)return alert('No se cargo ningun producto porque no hay stock disponible en inventario.');
+    toast(result.skipped.length?'Carga base parcial aplicada':'Carga base aplicada');
+    if(result.skipped.length){
+      const lines=result.skipped.slice(0,14).map(x=>{
+        const p=product(x.productId);
+        return `${p?p.name:x.productId}: pedido ${x.requested}, cargado ${x.loaded}, faltan ${x.missing}`;
+      });
+      alert(`Carga base aplicada parcialmente.\n\nProductos sin stock suficiente:\n${lines.join('\n')}${result.skipped.length>14?'\n...':''}`);
+    }
+  }catch(e){console.error(e);alert(inventoryErrorMessage(e))}
+}
+async function saveCourierMovement(type){
+  if(!canControlCouriers())return alert('Sin permiso');
+  const cid=selectedControlCourierId(),bid=branchId(),date=controlDate(),pid=document.getElementById('crProd')?.value,qty=Number(document.getElementById('crQty')?.value||0);
+  if(!cid)return alert('Elige repartidor');
+  if(!pid)return alert('Elige producto');
+  if(qty<=0)return alert('Cantidad requerida');
+  const c=state.couriers.find(x=>x.id===cid)||{};
+  const movement={id:uid(),branchId:bid,date,courierId:cid,courierName:c.name||cid,productId:pid,qty,type,source:'manual',time:nowTime(),user:state.currentUser.name,createdAt:Date.now()};
+  const deltas={};addInventoryDelta(deltas,pid,type==='load'?-qty:qty);
+  try{
+    await cloudCommitInventoryDeltas(bid,deltas,{courierMovements:[movement]});
+    state.courierMovements.push(movement);saveLocal();renderControlRepartidor();toast(type==='load'?'Producto cargado':'Devolucion registrada');
+  }catch(e){console.error(e);alert(inventoryErrorMessage(e))}
+}
+function selectControlRepProduct(pid){const el=document.getElementById('crProd');if(el)el.value=pid}
+function renderControlRepartidor(){
+  const cid=selectedControlCourierId(),date=controlDate(),edit=canControlCouriers()&&branchId()!=='all';
+  const cList=couriers();
+  const prods=state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase())));
+  const summaryRows=courierControlSummary(date,cid);
+  const missingValue=summaryRows.reduce((a,r)=>a+(r.diff<0?Math.abs(r.diff)*Number(product(r.productId)?.salePrice||0):0),0);
+  const tabs=`<div class="row" style="margin:10px 0"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.controlRepQuery||''}" oninput="state.controlRepQuery=this.value;renderControlRepartidor()"></div><div class="tabs">${state.categories.filter(c=>c!=='Reparto').map(cat=>`<button class="tab ${state.controlRepCategory===cat?'active':''}" onclick="state.controlRepCategory='${cat}';state.controlRepQuery='';renderControlRepartidor()">${cat}</button>`).join('')}</div>`;
+  document.getElementById('view-controlRep').innerHTML=`<div class="grid2"><div class="card"><h3>Control productos repartidor</h3>${navDate(date,'setControlRepDate')}<label>Repartidor</label><select class="input" onchange="state.controlRepCourierId=this.value;saveLocal();renderControlRepartidor()">${cList.map(c=>`<option value="${c.id}" ${cid===c.id?'selected':''}>${c.name}</option>`).join('')}</select>${edit?`<div style="margin-top:10px"><button class="btn btn-primary" onclick="applyCourierBaseLoad()" ${baseLoadApplied(date,cid)?'disabled':''}>Aplicar carga base</button></div><label style="margin-top:12px">Producto</label>${tabs}<select id="crProd" class="input">${prods.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><div class="grid3" style="margin-top:10px"><input id="crQty" class="input" type="number" value="1"><button class="btn btn-secondary" onclick="saveCourierMovement('load')">Cargar extra</button><button class="btn btn-primary" onclick="saveCourierMovement('return')">Registrar devoluci?n</button></div><div class="grid3" style="margin-top:10px">${prods.map(p=>`<div class="prod" onclick="selectControlRepProduct('${p.id}')"><div><b>${p.name}</b><div class="badge">${p.category}</div></div><div class="price">Elegir</div></div>`).join('')||'<div class="muted">Sin productos.</div>'}</div>`:'<div class="muted" style="margin-top:10px">Vista solo lectura.</div>'}</div><div class="card"><h3>Cuadre del repartidor</h3><div class="item between"><span>Diferencia valorizada faltante</span><b class="${missingValue?'red':'green'}">${clp(missingValue)}</b></div><table class="table"><thead><tr><th align="left">Producto</th><th align="right">Entregado</th><th align="right">Vendido</th><th align="right">Debe devolver</th><th align="right">Devuelto</th><th align="right">Dif.</th></tr></thead><tbody>${summaryRows.map(r=>`<tr><td>${product(r.productId)?.name||r.productId}</td><td align="right">${r.delivered}</td><td align="right">${r.sold}</td><td align="right">${r.expected}</td><td align="right">${r.returned}</td><td align="right" class="${r.diff<0?'red':r.diff>0?'green':''}">${r.diff}</td></tr>`).join('')}</tbody></table></div></div>`
+}
+function setControlRepDate(v){state.selectedCourierDate=v;saveLocal();renderControlRepartidor()}
+
+function movementWarehouseDelta(m,mult=1){
+  const deltas={};
+  addInventoryDelta(deltas,m.productId,(m.type==='load'?-1:1)*Number(m.qty||0)*Number(mult||1));
+  return deltas;
+}
+function movementTypeLabel(m){return m.type==='load'?'Carga':'Devolucion'}
+async function editCourierMovement(id){
+  if(!canControlCouriers())return alert('Sin permiso');
+  const idx=(state.courierMovements||[]).findIndex(m=>m.id===id);
+  if(idx<0)return alert('Movimiento no encontrado');
+  const old=state.courierMovements[idx];
+  if(old.branchId!==branchId())return alert('No puedes editar movimientos de otra sucursal');
+  const qty=Number(prompt(`Nueva cantidad para ${product(old.productId)?.name||old.productId}`,old.qty)||0);
+  if(qty<=0)return alert('Cantidad invalida');
+  const updated={...old,qty,editedAt:Date.now(),editedBy:state.currentUser.name};
+  const deltas=mergeInventoryDeltas(invertInventoryDeltas(movementWarehouseDelta(old)),movementWarehouseDelta(updated));
+  try{
+    await cloudCommitInventoryDeltas(old.branchId,deltas,{courierMovements:[updated]});
+    state.courierMovements[idx]=updated;
+    saveLocal();renderControlRepartidor();toast('Movimiento editado');
+  }catch(e){console.error(e);alert(inventoryErrorMessage(e))}
+}
+async function deleteCourierMovement(id){
+  if(!canControlCouriers())return alert('Sin permiso');
+  const idx=(state.courierMovements||[]).findIndex(m=>m.id===id);
+  if(idx<0)return alert('Movimiento no encontrado');
+  const m=state.courierMovements[idx];
+  if(m.branchId!==branchId())return alert('No puedes borrar movimientos de otra sucursal');
+  if(!confirm(`Borrar ${movementTypeLabel(m).toLowerCase()} de ${m.qty} ${product(m.productId)?.name||m.productId}?`))return;
+  try{
+    await cloudCommitInventoryDeltas(m.branchId,invertInventoryDeltas(movementWarehouseDelta(m)),{deleteCourierMovementIds:[id]});
+    state.courierMovements.splice(idx,1);
+    saveLocal();renderControlRepartidor();toast('Movimiento borrado');
+  }catch(e){console.error(e);alert(inventoryErrorMessage(e))}
+}
+async function returnCourierRemaining(){
+  if(!canControlCouriers())return alert('Sin permiso');
+  const cid=selectedControlCourierId(),bid=branchId(),date=controlDate();
+  if(!cid)return alert('Elige repartidor');
+  const c=state.couriers.find(x=>x.id===cid)||{};
+  const rows=courierControlSummary(date,cid,bid)
+    .map(r=>({...r,qty:Math.max(0,Number(r.expected||0)-Number(r.returned||0))}))
+    .filter(r=>r.qty>0);
+  if(!rows.length)return alert('No hay sobrantes pendientes para devolver al inventario.');
+  if(!confirm(`Devolver al inventario todos los sobrantes de ${c.name||cid}?`))return;
+  const now=Date.now(),time=nowTime();
+  const movements=rows.map(r=>({
+    id:uid(),branchId:bid,date,courierId:cid,courierName:c.name||cid,
+    productId:r.productId,qty:r.qty,type:'return',source:'autoRemaining',
+    time,user:state.currentUser.name,createdAt:now
+  }));
+  const deltas={};movements.forEach(m=>addInventoryDelta(deltas,m.productId,m.qty));
+  try{
+    await cloudCommitInventoryDeltas(bid,deltas,{courierMovements:movements});
+    state.courierMovements.push(...movements);
+    saveLocal();renderControlRepartidor();toast('Sobrantes devueltos al inventario');
+  }catch(e){console.error(e);alert(inventoryErrorMessage(e))}
+}
+renderControlRepartidor=function(){
+  const cid=selectedControlCourierId(),date=controlDate(),edit=canControlCouriers()&&branchId()!=='all';
+  const cList=couriers();
+  const prods=state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase())));
+  const summaryRows=courierControlSummary(date,cid);
+  const baseRows=courierBaseRows();
+  const movementRows=courierMovementRows(date,cid).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
+  const missingValue=summaryRows.reduce((a,r)=>a+(r.diff<0?Math.abs(r.diff)*Number(product(r.productId)?.salePrice||0):0),0);
+  const tabs=`<div class="row" style="margin:10px 0"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.controlRepQuery||''}" oninput="state.controlRepQuery=this.value;renderControlRepartidor()"></div><div class="tabs">${state.categories.filter(c=>c!=='Reparto').map(cat=>`<button class="tab ${state.controlRepCategory===cat?'active':''}" onclick="state.controlRepCategory='${cat}';state.controlRepQuery='';renderControlRepartidor()">${cat}</button>`).join('')}</div>`;
+  const baseTable=`<h4 style="margin-top:14px">Carga base diaria</h4><table class="table"><thead><tr><th align="left">Producto</th><th align="right">Cant.</th></tr></thead><tbody>${baseRows.map(r=>`<tr><td>${product(r.productId)?.name||r.productId}</td><td align="right">${r.qty}</td></tr>`).join('')}</tbody></table>`;
+  const movementsTable=`<h4 style="margin-top:14px">Movimientos</h4><table class="table"><thead><tr><th align="left">Hora</th><th align="left">Tipo</th><th align="left">Producto</th><th align="right">Cant.</th><th align="right">Accion</th></tr></thead><tbody>${movementRows.map(m=>`<tr><td>${m.time||''}</td><td>${movementTypeLabel(m)} ${m.source==='base'?'base':'manual'}</td><td>${product(m.productId)?.name||m.productId}</td><td align="right">${m.qty}</td><td align="right">${edit?`<button class="btn btn-secondary" onclick="editCourierMovement('${m.id}')">Editar</button> <button class="btn btn-danger" onclick="deleteCourierMovement('${m.id}')">Borrar</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">Sin movimientos.</td></tr>'}</tbody></table>`;
+  document.getElementById('view-controlRep').innerHTML=`<div class="grid2"><div class="card"><h3>Control productos repartidor</h3>${navDate(date,'setControlRepDate')}<label>Repartidor</label><select class="input" onchange="state.controlRepCourierId=this.value;saveLocal();renderControlRepartidor()">${cList.map(c=>`<option value="${c.id}" ${cid===c.id?'selected':''}>${c.name}</option>`).join('')}</select>${edit?`<div style="margin-top:10px"><button class="btn btn-primary" onclick="applyCourierBaseLoad()" ${baseLoadApplied(date,cid)?'disabled':''}>Aplicar carga base diaria</button></div>${baseTable}<label style="margin-top:12px">Producto</label>${tabs}<select id="crProd" class="input">${prods.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><div class="grid3" style="margin-top:10px"><input id="crQty" class="input" type="number" value="1"><button class="btn btn-secondary" onclick="saveCourierMovement('load')">Cargar extra</button><button class="btn btn-primary" onclick="saveCourierMovement('return')">Registrar devolucion</button></div><button class="btn btn-green" style="margin-top:10px;width:100%" onclick="returnCourierRemaining()">Devolver todo lo sobrante al inventario</button><div class="grid3" style="margin-top:10px">${prods.map(p=>`<div class="prod" onclick="selectControlRepProduct('${p.id}')"><div><b>${p.name}</b><div class="badge">${p.category}</div></div><div class="price">Elegir</div></div>`).join('')||'<div class="muted">Sin productos.</div>'}</div>`:`${baseTable}<div class="muted" style="margin-top:10px">Vista solo lectura.</div>`}</div><div class="card"><h3>Cuadre del repartidor</h3><div class="item between"><span>Diferencia valorizada faltante</span><b class="${missingValue?'red':'green'}">${clp(missingValue)}</b></div><table class="table"><thead><tr><th align="left">Producto</th><th align="right">Entregado</th><th align="right">Vendido</th><th align="right">Debe devolver</th><th align="right">Devuelto</th><th align="right">Dif.</th></tr></thead><tbody>${summaryRows.map(r=>`<tr><td>${product(r.productId)?.name||r.productId}</td><td align="right">${r.delivered}</td><td align="right">${r.sold}</td><td align="right">${r.expected}</td><td align="right">${r.returned}</td><td align="right" class="${r.diff<0?'red':r.diff>0?'green':''}">${r.diff}</td></tr>`).join('')}</tbody></table>${movementsTable}</div></div>`
+}
 
 function renderInventario(){
   const rows=state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()),edit=canManage();
@@ -894,7 +1321,7 @@ function renderFacturas(){
         <div class="card" style="margin-top:12px;background:#f8fafc">
           <h4>Productos en esta factura</h4>
           <div class="list">
-            ${state.invoiceDraft.length?state.invoiceDraft.map((i,idx)=>`<div class="item between"><div><b>${product(i.productId)?.name||i.productId}</b><div class="muted small">${i.qty} x ${clp(i.cost)}</div></div><div class="row"><b>${clp(i.qty*i.cost)}</b><button class="btn btn-danger" onclick="removeInvoiceItem(${idx})">X</button></div></div>`).join(''):'<div class="muted">Aún no agregas productos.</div>'}
+            ${state.invoiceDraft.length?state.invoiceDraft.map((i,idx)=>`<div class="item between"><div><b>${product(i.productId)?.name||i.productId}</b><div class="muted small">${i.qty} x ${clp(i.cost)}</div></div><div class="row"><b>${clp(i.qty*i.cost)}</b><button class="btn btn-danger" onclick="removeInvoiceItem(${idx})">X</button></div></div>`).join(''):'<div class="muted">A?n no agregas productos.</div>'}
           </div>
           <div class="item between"><span>Total factura</span><b>${clp(draftTotal)}</b></div>
           <div class="row">
@@ -988,7 +1415,7 @@ function saveInvoice(){
   const total=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
 
   if(state.editInvoiceId && !state.invoiceDraft.length){
-    if(confirm('La factura quedó sin productos. ¿Quieres borrar la factura completa?')){
+    if(confirm('La factura qued? sin productos. ¿Quieres borrar la factura completa?')){
       deleteInvoice(state.editInvoiceId);
       return;
     }
@@ -1077,6 +1504,8 @@ addProductManual=function(){
     item.drinkSize=document.getElementById('npDrinkSize').value;
     item.trackStock=true;
     if(!item.baseProductId)return alert('El combo necesita producto base');
+  }else if(item.category==='Bebidas'){
+    item.drinkSize=document.getElementById('npDrinkSize').value;
   }
   state.products.push(item);
   state.prodCategory=item.category;
@@ -1108,7 +1537,26 @@ function addCourier(){if(!canManage())return;const name=document.getElementById(
 
 renderUsuarios=function(){
   const branchOptions=state.branches.map(b=>`<option value="${b.id}">${b.name}</option>`).join('');
-  document.getElementById('view-usuarios').innerHTML=`<div class="grid2"><div><div class="card"><h3>Agregar usuario</h3>${canManage()?`<input id="nuName" class="input" placeholder="Nombre usuario"><select id="nuRole" class="input" style="margin-top:8px"><option value="admin">Administrador</option><option value="operador">Operador</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addUser()">Guardar usuario</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card" style="margin-top:14px"><h3>Repartidores</h3>${canManage()?`<label>Nombre repartidor</label><input id="nrName" class="input" placeholder="Nuevo repartidor"><label style="margin-top:8px">Sucursal</label><select id="nrBranch" class="input">${branchOptions}</select><button class="btn btn-primary" style="margin-top:10px" onclick="addCourier()">Agregar repartidor</button>`:'<div class="muted">Solo lectura.</div>'}</div></div><div class="card"><h3>Usuarios</h3><div class="list">${state.users.map(u=>`<div class="item"><b>${u.name}</b><div class="muted small">${u.role} · ${branchName(u.branchId)}</div>${canManage()?`<label>Clave</label><input class="input" value="${u.password}" onchange="u.password=this.value;cloudSaveConfig();saveLocal()">`:''}</div>`).join('')}</div><hr><h3>Repartidores cargados</h3><div class="list">${state.couriers.map(c=>`<div class="item between"><div><b>${c.name}</b><div class="muted small">${branchName(c.branchId)}</div></div>${canManage()?`<button class="btn btn-danger" onclick="deleteCourier('${c.id}')">Borrar</button>`:''}</div>`).join('')||'<div class="muted">No hay repartidores cargados.</div>'}</div></div></div>`
+  document.getElementById('view-usuarios').innerHTML=`<div class="grid2"><div><div class="card"><h3>Agregar usuario</h3>${canManage()?`<input id="nuName" class="input" placeholder="Nombre usuario"><select id="nuRole" class="input" style="margin-top:8px"><option value="admin">Administrador</option><option value="operador">Operador</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addUser()">Guardar usuario</button>`:'<div class="muted">Solo administrador puede agregar usuarios.</div>'}</div><div class="card" style="margin-top:14px"><h3>Repartidores</h3>${canManage()?`<label>Nombre repartidor</label><input id="nrName" class="input" placeholder="Nuevo repartidor"><label style="margin-top:8px">Sucursal</label><select id="nrBranch" class="input">${branchOptions}</select><button class="btn btn-primary" style="margin-top:10px" onclick="addCourier()">Agregar repartidor</button>`:'<div class="muted">Solo administrador puede modificar repartidores.</div>'}</div></div><div class="card"><h3>Usuarios</h3><div class="list">${state.users.map(u=>`<div class="item"><b>${u.name}</b><div class="muted small">${u.role} · ${branchName(u.branchId)}</div>${canEditPasswords()?`<label>Clave</label><input class="input" value="${u.password}" onchange="saveUserPassword('${u.id}',this.value)">`:''}</div>`).join('')}</div><hr><h3>Repartidores cargados</h3><div class="list">${state.couriers.map(c=>`<div class="item between"><div><b>${c.name}</b><div class="muted small">${branchName(c.branchId)}</div></div>${canManage()?`<button class="btn btn-danger" onclick="deleteCourier('${c.id}')">Borrar</button>`:''}</div>`).join('')||'<div class="muted">No hay repartidores cargados.</div>'}</div></div></div>`
+}
+async function saveUserPassword(id,value){
+  if(!canEditPasswords())return alert('Sin permiso');
+  const u=state.users.find(x=>x.id===id);
+  if(!u)return alert('Usuario no encontrado');
+  const before=u.password;
+  u.password=String(value||'').trim();
+  if(!u.password){u.password=before;renderUsuarios();return alert('La clave no puede quedar vacia')}
+  try{
+    await cloudSaveConfig();
+    saveLocal();
+    initLogin();
+    toast('Clave actualizada');
+  }catch(e){
+    u.password=before;
+    console.error(e);
+    alert('No se pudo guardar la clave en Firebase');
+    renderUsuarios();
+  }
 }
 addCourier=function(){
   if(!canManage())return;
@@ -1149,6 +1597,123 @@ function inventoryRowsForProductIds(ids,bid){return ids.map(pid=>inventoryRow(pi
 function inventoryRowsForSale(s){return inventoryRowsForProductIds(uniqueProductIdsFromItems((s||{}).items||[]),(s||{}).branchId)}
 function inventoryRowsForInvoiceItems(items,bid){return inventoryRowsForProductIds([...(new Set((items||[]).map(i=>i.productId)))],bid)}
 async function cloudSaveInventoryRows(rows){if(!canUseFirebase())return;await Promise.all((rows||[]).map(r=>cloudSaveInventoryRow(r)))}
+function addInventoryDelta(map,pid,stockDelta,opts={}){
+  if(!pid)return;
+  if(!map[pid])map[pid]={productId:pid,stockDelta:0};
+  map[pid].stockDelta+=Number(stockDelta||0);
+  if(opts.cost!==undefined&&Number(opts.cost)>0)map[pid].cost=Number(opts.cost);
+  if(opts.min!==undefined)map[pid].min=Number(opts.min||0);
+}
+function saleInventoryDeltas(items,mult){
+  const deltas={};
+  (items||[]).forEach(i=>(i.components||[]).forEach(c=>addInventoryDelta(deltas,c.productId,Number(mult||1)*Number(c.qty||0)*Number(i.qty||1))));
+  return deltas;
+}
+function invoiceInventoryDeltas(items,mult){
+  const deltas={};
+  (items||[]).forEach(i=>addInventoryDelta(deltas,i.productId,Number(mult||1)*Number(i.qty||0),Number(mult||1)>0?{cost:Number(i.cost||0)}:{}));
+  return deltas;
+}
+function mergeInventoryDeltas(...maps){
+  const out={};
+  maps.forEach(m=>Object.values(m||{}).forEach(d=>addInventoryDelta(out,d.productId,d.stockDelta,d)));
+  return out;
+}
+function syncLocalInventoryRows(rows){
+  (rows||[]).forEach(row=>{
+    let r=inventoryRow(row.productId,row.branchId);
+    if(!r){r={branchId:row.branchId,productId:row.productId,stock:0,cost:0,min:0};state.inventory.push(r)}
+    Object.assign(r,row);
+  });
+}
+function applyCostsFromInventoryRows(items,rows){
+  const costs=new Map((rows||[]).map(r=>[r.productId,Number(r.cost||0)]));
+  (items||[]).forEach(i=>(i.components||[]).forEach(c=>{
+    if(costs.has(c.productId))c.costAtSale=costs.get(c.productId);
+  }));
+}
+function inventoryErrorMessage(e){
+  return String(e&&e.message||e||'No se pudo actualizar inventario');
+}
+async function cloudCommitInventoryDeltas(bid,deltas,meta={}){
+  if(!canUseFirebase())throw new Error('Firebase no disponible');
+  const f=window.FONO_FIREBASE;
+  const entries=Object.values(deltas||{}).filter(d=>d&&d.productId&&(Number(d.stockDelta||0)!==0||d.cost!==undefined||d.min!==undefined));
+  const committed=[];
+  await f.runTransaction(f.db,async tx=>{
+    const reads=[];
+    for(const d of entries){
+      const ref=f.doc(f.db,'inventory',`${bid}_${d.productId}`);
+      const snap=await tx.get(ref);
+      reads.push({d,ref,snap});
+    }
+    for(const {d,ref,snap} of reads){
+      const existing=snap.exists()?snap.data():(inventoryRow(d.productId,bid)||{branchId:bid,productId:d.productId,stock:0,cost:0,min:0});
+      const newStock=Number(existing.stock||0)+Number(d.stockDelta||0);
+      const p=product(d.productId);
+      if(newStock<0)throw new Error(`Stock insuficiente: ${p?p.name:d.productId}. Disponible ${Number(existing.stock||0)}, movimiento ${Number(d.stockDelta||0)}`);
+      const localRow={
+        branchId:bid,
+        productId:d.productId,
+        stock:newStock,
+        cost:d.cost!==undefined&&Number(d.cost)>0?Number(d.cost):Number(existing.cost||0),
+        min:d.min!==undefined?Number(d.min||0):Number(existing.min||0)
+      };
+      tx.set(ref,{...localRow,updatedAt:f.serverTimestamp()},{merge:true});
+      committed.push(localRow);
+    }
+    if(meta.sale){
+      applyCostsFromInventoryRows(meta.sale.items,committed);
+      tx.set(f.doc(f.db,'sales',meta.sale.id),{...saleCloudCopy(meta.sale,'synced'),updatedAt:f.serverTimestamp()});
+    }
+    if(meta.deleteSaleId)tx.delete(f.doc(f.db,'sales',meta.deleteSaleId));
+    if(meta.invoice)tx.set(f.doc(f.db,'invoices',meta.invoice.id),{...invoiceCloudCopy(meta.invoice),updatedAt:f.serverTimestamp()});
+    if(meta.deleteInvoiceId)tx.delete(f.doc(f.db,'invoices',meta.deleteInvoiceId));
+    (meta.courierMovements||[]).forEach(m=>tx.set(f.doc(f.db,'courierMovements',m.id),{...m,updatedAt:f.serverTimestamp()}));
+    (meta.deleteCourierMovementIds||[]).forEach(id=>tx.delete(f.doc(f.db,'courierMovements',id)));
+  });
+  syncLocalInventoryRows(committed);
+  return committed;
+}
+async function cloudCommitCourierBaseLoadPartial(bid,movements){
+  if(!canUseFirebase())throw new Error('Firebase no disponible');
+  const f=window.FONO_FIREBASE;
+  const committed=[],savedMovements=[],skipped=[];
+  const wanted=(movements||[]).filter(m=>m&&m.productId&&Number(m.qty||0)>0);
+  await f.runTransaction(f.db,async tx=>{
+    const reads=[];
+    for(const m of wanted){
+      const ref=f.doc(f.db,'inventory',`${bid}_${m.productId}`);
+      const snap=await tx.get(ref);
+      reads.push({m,ref,snap});
+    }
+    for(const {m,ref,snap} of reads){
+      const existing=snap.exists()?snap.data():(inventoryRow(m.productId,bid)||{branchId:bid,productId:m.productId,stock:0,cost:0,min:0});
+      const requested=Number(m.qty||0);
+      const currentStock=Number(existing.stock||0);
+      const loaded=Math.min(requested,Math.max(0,currentStock));
+      if(loaded<=0){
+        skipped.push({productId:m.productId,requested,loaded:0,missing:requested});
+        continue;
+      }
+      const localRow={
+        branchId:bid,
+        productId:m.productId,
+        stock:currentStock-loaded,
+        cost:Number(existing.cost||0),
+        min:Number(existing.min||0)
+      };
+      const saved={...m,qty:loaded,requestedQty:requested,partial:loaded<requested};
+      tx.set(ref,{...localRow,updatedAt:f.serverTimestamp()},{merge:true});
+      tx.set(f.doc(f.db,'courierMovements',saved.id),{...saved,updatedAt:f.serverTimestamp()});
+      committed.push(localRow);
+      savedMovements.push(saved);
+      if(loaded<requested)skipped.push({productId:m.productId,requested,loaded,missing:requested-loaded});
+    }
+  });
+  syncLocalInventoryRows(committed);
+  return {rows:committed,movements:savedMovements,skipped};
+}
 function applyInvoiceStockLocal(items,mult,bid=branchId()){
   (items||[]).forEach(i=>{
     let r=inventoryRow(i.productId,bid);
@@ -1167,8 +1732,10 @@ async function syncPendingSales(){
   const pending=(state.sales||[]).filter(s=>s.syncStatus&&s.syncStatus!=='synced');
   for(const sale of pending){
     try{
-      await cloudSaveSale(saleCloudCopy(sale,'synced'));
-      await cloudSaveInventoryRows(inventoryRowsForSale(sale));
+      const deltas=sale.warehouseDeltas||saleWarehouseDeltasForCourier(sale);
+      sale.warehouseDeltas=deltas;
+      const rows=await cloudCommitInventoryDeltas(sale.branchId,deltas,{sale});
+      applyCostsFromInventoryRows(sale.items,rows);
       sale.syncStatus='synced';
       sale.syncedAt=Date.now();
     }catch(e){
@@ -1189,21 +1756,26 @@ cloudLoadAll=async function(){
     await cloudLoadConfig();
     seedInventory();
     await cloudLoadInventory();
-    const [sales,invoices,closures,capitalResets]=await Promise.all([
+    const [sales,invoices,closures,capitalResets,monthlyExpenses,courierMovements]=await Promise.all([
       cloudLoadCollection('sales'),
       cloudLoadCollection('invoices'),
       cloudLoadCollection('closures'),
-      cloudLoadCollection('capitalResets')
+      cloudLoadCollection('capitalResets'),
+      cloudLoadCollection('monthlyExpenses'),
+      cloudLoadCollection('courierMovements')
     ]);
     state.sales=mergeById(Array.isArray(sales)?sales:[],pendingSales);
     state.invoices=Array.isArray(invoices)?invoices:[];
     state.closures=Array.isArray(closures)?closures:[];
     state.capitalResets=Array.isArray(capitalResets)?capitalResets:[];
+    state.monthlyExpenses=Array.isArray(monthlyExpenses)?monthlyExpenses:[];
+    state.courierMovements=Array.isArray(courierMovements)?courierMovements:[];
     pendingSales.forEach(s=>{
       if(!(sales||[]).some(x=>x.id===s.id)){
         (s.items||[]).forEach(i=>applyStock(i.components,-Number(i.qty||1),s.branchId));
       }
     });
+    repairStateTextEncoding();
     seedInventory();
     saveLocal();
     await syncPendingSales();
@@ -1336,6 +1908,193 @@ saveInvoice=async function(){
     console.error(e);alert('No se pudo guardar factura en Firebase');
   }
 }
+
+saveSale=async function(){
+  if(!canSell())return alert('Usuario solo lectura');
+  if(!getTurnOpen()&&!state.editSaleId)return alert('Debes abrir el turno para registrar ventas.');
+  if(!state.cart.length)return alert('No hay productos');
+  if(!getSelectedCourier())return alert('Elige repartidor');
+  const total=cartTotal();
+  let payments={efectivo:0,transferencia:0,transbank:0};
+  if(state.paymentMode==='efectivo')payments.efectivo=total;
+  if(state.paymentMode==='transferencia')payments.transferencia=total;
+  if(state.paymentMode==='transbank')payments.transbank=total;
+  if(state.paymentMode==='mixto'){
+    payments={efectivo:Number(state.mixEf||0),transferencia:Number(state.mixTr||0),transbank:Number(state.mixTb||0)};
+    if(payments.efectivo+payments.transferencia+payments.transbank!==total)return alert('El pago mixto no cuadra');
+  }
+  const rep=state.couriers.find(c=>c.id===getSelectedCourier())||{};
+  if(state.editSaleId){
+    const idx=state.sales.findIndex(s=>s.id===state.editSaleId);
+    if(idx<0){state.editSaleId=null;return alert('No se encontro la venta a editar')}
+    const oldSale=state.sales[idx];
+    if(oldSale.branchId!==branchId())return alert('No puedes editar pedidos de otra sucursal');
+    const editedSale={...oldSale,courierId:rep.id,courierName:rep.name,items:cloneData(state.cart),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,editedAt:Date.now(),editedBy:state.currentUser.name,syncStatus:'pendingEdit'};
+    if(canUseFirebase()){
+      try{
+        const oldDeltas=oldSale.warehouseDeltas||saleInventoryDeltas(oldSale.items,-1);
+        const newDeltas=saleWarehouseDeltasForCourier(editedSale,oldSale.id);
+        editedSale.warehouseDeltas=newDeltas;
+        const deltas=mergeInventoryDeltas(invertInventoryDeltas(oldDeltas),newDeltas);
+        const rows=await cloudCommitInventoryDeltas(editedSale.branchId,deltas,{sale:editedSale});
+        applyCostsFromInventoryRows(editedSale.items,rows);
+        editedSale.syncStatus='synced';editedSale.syncedAt=Date.now();
+        state.sales[idx]=editedSale;
+        state.cart=[];state.editSaleId=null;state.view='libro';saveLocal();render();toast('Venta editada');
+      }catch(e){
+        console.error(e);return alert(inventoryErrorMessage(e));
+      }
+    }else{
+      const problems=stockProblemsForRequirements(stockRequirements(state.cart),oldSale.branchId,stockCreditFromSale(oldSale));
+      if(problems.length)return alert(stockProblemMessage(problems));
+      oldSale.items.forEach(i=>applyStock(i.components,Number(i.qty||1),oldSale.branchId));
+      editedSale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),editedSale.branchId));
+      state.sales[idx]=editedSale;
+      state.cart=[];state.editSaleId=null;state.view='libro';saveLocal();render();toast('Venta editada localmente. Pendiente Firebase.');
+    }
+    return;
+  }
+  const sale={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),user:state.currentUser.name,courierId:rep.id,courierName:rep.name,items:cloneData(state.cart),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,createdAt:Date.now(),syncStatus:'pending'};
+  if(canUseFirebase()){
+    try{
+      const deltas=saleWarehouseDeltasForCourier(sale);
+      sale.warehouseDeltas=deltas;
+      const rows=await cloudCommitInventoryDeltas(sale.branchId,deltas,{sale});
+      applyCostsFromInventoryRows(sale.items,rows);
+      sale.syncStatus='synced';sale.syncedAt=Date.now();
+      state.sales.push(sale);state.cart=[];state.selectedHistoryDate=state.activeDate;state.view='libro';saveLocal();render();toast('Pedido registrado');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
+  }else{
+    const problems=stockProblemsForRequirements(stockRequirements(sale.items),sale.branchId);
+    if(problems.length)return alert(stockProblemMessage(problems));
+    sale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),sale.branchId));
+    state.sales.push(sale);state.cart=[];state.selectedHistoryDate=state.activeDate;state.view='libro';saveLocal();render();toast('Pedido guardado local. Pendiente Firebase.');
+  }
+}
+deleteSale=async function(id){
+  if(!canEditDailyOrders())return;
+  const idx=state.sales.findIndex(s=>s.id===id);if(idx<0)return;
+  const s=state.sales[idx];
+  if(s.branchId!==branchId())return alert('No puedes borrar pedidos de otra sucursal');
+  if(canUseFirebase()){
+    try{
+      await cloudCommitInventoryDeltas(s.branchId,invertInventoryDeltas(s.warehouseDeltas||saleInventoryDeltas(s.items,-1)),{deleteSaleId:id});
+      state.sales.splice(idx,1);saveLocal();renderLibro();toast('Venta borrada');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
+  }else{
+    s.items.forEach(i=>applyStock(i.components,Number(i.qty||1),s.branchId));
+    state.sales.splice(idx,1);saveLocal();renderLibro();toast('Venta borrada localmente');
+  }
+}
+adjustInventory=async function(){
+  if(!canManage())return alert('Sin permiso');
+  const pid=document.getElementById('invProd').value,act=document.getElementById('invAction').value,qty=Number(document.getElementById('invQty').value||0),min=Number(document.getElementById('invMin').value||0),cost=Number(document.getElementById('invCost').value||0);
+  if(!pid)return alert('Elige un producto');
+  const delta=act==='add'?qty:-qty;
+  if(canUseFirebase()){
+    try{
+      await cloudCommitInventoryDeltas(branchId(),{[pid]:{productId:pid,stockDelta:delta,cost:cost>0?cost:undefined,min}});
+      saveLocal();renderInventario();toast('Inventario actualizado');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
+  }else{
+    let r=inventoryRow(pid);if(!r){r={branchId:branchId(),productId:pid,stock:0,cost:0,min:0};state.inventory.push(r)}
+    if(delta<0&&Number(r.stock||0)<Math.abs(delta))return alert(stockProblemMessage([`${product(pid)?.name||pid}: disponible ${Number(r.stock||0)}, requerido ${Math.abs(delta)}`]));
+    r.stock=Number(r.stock||0)+delta;r.min=min;if(cost>0)r.cost=cost;saveLocal();renderInventario();toast('Inventario actualizado localmente');
+  }
+}
+deleteInvoice=async function(id){
+  if(!canManage())return alert('Sin permiso');
+  const idx=state.invoices.findIndex(f=>f.id===id);if(idx<0)return alert('Factura no encontrada');
+  if(!confirm('Borrar esta factura completa y descontarla del inventario?'))return;
+  const old=state.invoices[idx];
+  if(canUseFirebase()){
+    try{
+      await cloudCommitInventoryDeltas(old.branchId,invoiceInventoryDeltas(old.items,-1),{deleteInvoiceId:id});
+      state.invoices.splice(idx,1);saveLocal();renderFacturas();toast('Factura borrada');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
+  }else{
+    const problems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);
+    if(problems.length)return alert(stockProblemMessage(problems));
+    applyInvoiceStockLocal(old.items,-1,old.branchId);
+    state.invoices.splice(idx,1);saveLocal();renderFacturas();toast('Factura borrada localmente');
+  }
+}
+saveInvoice=async function(){
+  if(!canManage())return alert('Sin permiso');
+  const provider=(document.getElementById('facProv')?.value.trim())||state.invoiceProvider||'Proveedor';
+  const type=invoiceTypeValue(document.getElementById('facType')?.value||state.invoiceType);
+  if(!state.invoiceDraft.length&&!state.editInvoiceId)return alert('Agrega productos a la factura');
+  const total=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
+  if(state.editInvoiceId&&!state.invoiceDraft.length)return alert('Agrega al menos un producto o borra la factura completa');
+  if(state.editInvoiceId){
+    const idx=state.invoices.findIndex(f=>f.id===state.editInvoiceId);if(idx<0){state.editInvoiceId=null;return alert('Factura no encontrada')}
+    const old=state.invoices[idx];
+    const edited={...old,provider,type,items:cloneData(state.invoiceDraft),total,editedAt:Date.now(),editedBy:state.currentUser.name};
+    if(canUseFirebase()){
+      try{
+        const deltas=mergeInventoryDeltas(invoiceInventoryDeltas(old.items,-1),invoiceInventoryDeltas(edited.items,1));
+        await cloudCommitInventoryDeltas(edited.branchId,deltas,{invoice:edited});
+        state.invoices[idx]=edited;state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura editada');
+      }catch(e){
+        console.error(e);return alert(inventoryErrorMessage(e));
+      }
+    }else{
+      const problems=stockProblemsForRequirements(invoiceStockRequirements(old.items),old.branchId);
+      if(problems.length)return alert(stockProblemMessage(problems));
+      applyInvoiceStockLocal(old.items,-1,old.branchId);applyInvoiceStockLocal(edited.items,1,edited.branchId);
+      state.invoices[idx]=edited;state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura editada localmente');
+    }
+    return;
+  }
+  const inv={id:uid(),branchId:branchId(),date:state.activeDate,time:nowTime(),provider,type,items:cloneData(state.invoiceDraft),total,createdAt:Date.now()};
+  if(canUseFirebase()){
+    try{
+      await cloudCommitInventoryDeltas(inv.branchId,invoiceInventoryDeltas(inv.items,1),{invoice:inv});
+      state.invoices.push(inv);state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura ingresada');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
+  }else{
+    applyInvoiceStockLocal(inv.items,1,inv.branchId);
+    state.invoices.push(inv);state.invoiceDraft=[];state.editInvoiceId=null;state.invoiceProvider='';state.invoiceType='reposicion';saveLocal();renderFacturas();toast('Factura ingresada localmente');
+  }
+}
+addProductManual=async function(){
+  if(!canManage())return;
+  const name=document.getElementById('npName').value.trim();
+  if(!name)return;
+  const type=document.getElementById('npType').value;
+  const item={id:uid(),name,category:document.getElementById('npCat').value,salePrice:Number(document.getElementById('npPrice').value||0),type,active:true,trackStock:type==='simple'};
+  if(type==='promo'){
+    item.baseProductId=document.getElementById('npBase').value;
+    item.drinkSize=document.getElementById('npDrinkSize').value;
+    item.trackStock=true;
+    if(!item.baseProductId)return alert('El combo necesita producto base');
+  }else if(item.category==='Bebidas'){
+    item.drinkSize=document.getElementById('npDrinkSize').value;
+  }
+  state.products.push(item);
+  state.prodCategory=item.category;
+  state.prodQuery='';
+  seedInventory();
+  try{
+    await cloudSaveConfig();
+    if(item.type==='simple')await cloudSaveInventoryRows(state.inventory.filter(r=>r.productId===item.id));
+    saveLocal();renderProductos();toast('Producto guardado');
+  }catch(e){
+    state.products=state.products.filter(p=>p.id!==item.id);
+    state.inventory=state.inventory.filter(r=>r.productId!==item.id);
+    console.error(e);alert('No se pudo guardar producto en Firebase');
+  }
+}
 closeShift=async function(){
   if(isOwner())return alert('Dueño solo lectura');
   const fuelEl=document.getElementById('fuelInput');if(fuelEl)setFuelDraft(fuelEl.value);
@@ -1405,13 +2164,22 @@ async function resetInventoryAndCapital(){
 }
 
 function renderAdmin(){const all=summary(state.sales);document.getElementById('view-admin').innerHTML=`<div class="grid3"><div class="card"><h3>Venta total</h3><div class="stat">${clp(all.sales)}</div></div><div class="card"><h3>Costo total</h3><div class="stat">${clp(all.cost)}</div></div><div class="card"><h3>Ganancia total</h3><div class="stat">${clp(all.profit)}</div></div></div><div class="card" style="margin-top:14px"><h3>Por sucursal</h3>${state.branches.map(b=>{const s=summary(branchSales(b.id));return `<div class="item between"><span>${b.name}</span><b>${clp(s.sales)}</b></div>`}).join('')}</div>`}
-function exportCSV(){toast('Exportar Excel se activará en la versión Firebase/GitHub')}
+function exportCSV(){toast('Exportar Excel se activar? en la versión Firebase/GitHub')}
 
 loadLocal();initLogin();
 window.setDashboardDate=setDashboardDate;window.updateProductPrice=updateProductPrice;window.login=login;window.logout=logout;window.setView=setView;window.setDashboardPeriod=setDashboardPeriod;window.addProductToCart=addProductToCart;window.removeCart=removeCart;window.cancelCart=cancelCart;window.saveSale=saveSale;window.setLibroDate=setLibroDate;window.setRepDate=setRepDate;window.setMonthNav=setMonthNav;window.editSale=editSale;window.deleteSale=deleteSale;window.adjustInventory=adjustInventory;window.addInvoiceItem=addInvoiceItem;window.removeInvoiceItem=removeInvoiceItem;window.cancelInvoiceDraft=cancelInvoiceDraft;window.editInvoice=editInvoice;window.deleteInvoice=deleteInvoice;window.saveInvoice=saveInvoice;window.addCategory=addCategory;window.addProductManual=addProductManual;window.addUser=addUser;window.addCourier=addCourier;window.closeShift=closeShift;window.openNewDay=openNewDay;window.reopenSameDay=reopenSameDay;window.exportCSV=exportCSV;window.cloudBackupAll=cloudBackupAll;
 window.selectInvoiceProduct=selectInvoiceProduct;
 window.deleteCourier=deleteCourier;
 window.resetInventoryAndCapital=resetInventoryAndCapital;
+window.saveUserPassword=saveUserPassword;
+window.setMonthlyExpense=setMonthlyExpense;
+window.applyCourierBaseLoad=applyCourierBaseLoad;
+window.saveCourierMovement=saveCourierMovement;
+window.returnCourierRemaining=returnCourierRemaining;
+window.editCourierMovement=editCourierMovement;
+window.deleteCourierMovement=deleteCourierMovement;
+window.setControlRepDate=setControlRepDate;
+window.selectControlRepProduct=selectControlRepProduct;
 </script>
 </body>
 </html>
