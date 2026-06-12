@@ -226,7 +226,6 @@ const BASE_PRODUCTS=[{id:'beer_silver',name:'Silver',category:'Cervezas',salePri
     {id:'b12',name:'Gatorade',category:'Bebidas',salePrice:3500,type:'simple',active:true,trackStock:true},
     {id:'b13',name:'Jugo Piña',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
     {id:'b14',name:'Jugo Durazno',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
-    {id:'b16',name:'Canada Dry Ginger Ale 1.5lt',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true,drinkSize:'1.5'},
     {id:'rb1',name:'RedBull Normal',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
     {id:'rb2',name:'RedBull Roja',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
     {id:'rb3',name:'RedBull Amarilla',category:'Bebidas',salePrice:3000,type:'simple',active:true,trackStock:true},
@@ -291,7 +290,7 @@ const COURIER_BASE_LOAD=[
   ['liq_ron_blanco',1],['liq_ron_havana',1],['liq_vodka_black',1],['liq_tequila',1],['liq_ramazzotti',1],['liq_jagger',1],['liq_absolut',1],['liq_bombay',1],
   ['wine_export',1],['wine_gato',1],['wine_casillero',1],['wine_esp_moscato',1],['wine_esp_brut',1],
   ['cock_pisco_sour',1],['cock_mango_sour',1],['cock_toffee',1],['cock_pina_colada',1],['cock_capel_ice',2],['cock_mistral_ice',1],['cock_mistral_energy',1],
-  ['beer_silver',4],['beer_cristal',4],['beer_royal',4],['beer_corona',4],['beer_bud',2],['beer_heineken',2],['beer_austral',1],['beer_kunstmann',1],
+  ['beer_silver',4],['beer_cristal',4],['beer_royal',4],['beer_corona',4],['beer_bud',2],['beer_heineken',2],['beer_austral',2],['beer_kunstmann',1],
   ['e3',1],['e2',1],['rb1',4],['rb2',2],['rb3',2],
   ['cig_lucky_click',3],['cig_lucky_berries',3],['cig_lucky_naranja',3],['cig_kent_manzana',3],['cig_kent_rosado',3],['cig_pallmall_click',3],['cig_pallmall_azul',3],['cig_americanos',5]
 ];
@@ -302,7 +301,7 @@ const COURIER_PRODUCT_ALIASES={
   pisco_nobel_barricas:['Nobel Barricas','Nobel Barrica','Mistral Barrica'],
   pisco_nobel_40:['Nobel 40','Mistral 40']
 };
-const LEGACY_DUPLICATE_PRODUCT_IDS=new Set(['pisco_nobel_manzana','pisco_nobel_barricas','pisco_nobel_40','b15']);
+const LEGACY_DUPLICATE_PRODUCT_IDS=new Set(['pisco_nobel_manzana','pisco_nobel_barricas','pisco_nobel_40','b15','b16']);
 
 function normalizeProducts(list){
   return (list||[]).filter(p=>p&&p.name).map(p=>({
@@ -852,6 +851,7 @@ function beverageDrinkSize(p){
   if(saved==='1.5'||saved==='3')return saved;
   const name=normProductName(p?.name);
   if(name.includes('1 5'))return '1.5';
+  if(name.includes('canada dry')||name.includes('ginger ale'))return '1.5';
   if(name.includes('3')||name.includes('mr big'))return '3';
   return '';
 }
@@ -1104,10 +1104,17 @@ function courierMovementMap(type,date=controlDate(),cid=selectedControlCourierId
 }
 function soldMapForCourier(date=controlDate(),cid=selectedControlCourierId(),bid=branchId(),ignoreSaleId=''){
   const out={};
-  (state.sales||[]).filter(s=>s.branchId===bid&&s.date===date&&s.courierId===cid&&s.id!==ignoreSaleId&&rowAfterBranchReset(s,bid)).forEach(s=>(s.items||[]).forEach(i=>(i.components||[]).forEach(c=>{
-    const wd=s.warehouseDeltas;
-    if(wd&&!Object.prototype.hasOwnProperty.call(wd,c.productId))addQty(out,c.productId,Number(c.qty||0)*Number(i.qty||1));
-  })));
+  (state.sales||[]).filter(s=>s.branchId===bid&&s.date===date&&s.courierId===cid&&s.id!==ignoreSaleId&&rowAfterBranchReset(s,bid)).forEach(s=>{
+    const explicit=s.courierSoldDeltas;
+    if(explicit&&Object.keys(explicit).length){
+      Object.values(explicit).forEach(d=>addQty(out,d.productId,Number(d.qty||0)));
+      return;
+    }
+    (s.items||[]).forEach(i=>(i.components||[]).forEach(c=>{
+      const wd=s.warehouseDeltas;
+      if(wd&&!Object.prototype.hasOwnProperty.call(wd,c.productId))addQty(out,c.productId,Number(c.qty||0)*Number(i.qty||1));
+    }));
+  });
   return out;
 }
 function defaultCourierProductIds(){return new Set(COURIER_BASE_LOAD.map(([pid])=>productIdForBase(pid)))}
@@ -1123,23 +1130,46 @@ function courierAvailableMap(date=controlDate(),cid=selectedControlCourierId(),b
 }
 function saleWarehouseDeltasForCourier(sale,ignoreSaleId=''){
   const req=saleInventoryDeltas(sale.items,1),available=courierAvailableMap(sale.date,sale.courierId,sale.branchId,ignoreSaleId),out={};
+  const courierSold={};
   Object.values(req).forEach(d=>{
-    const qty=Number(d.stockDelta||0),pid=d.productId,p=product(pid);
-    if(isCourierControlledProduct(pid,sale.date,sale.courierId,sale.branchId)){
-      if(Number(available[pid]||0)<qty){
-        const bodega=Number(inventoryRow(pid,sale.branchId)?.stock||0);
-        throw new Error(`Repartidor sin stock cargado: ${p?p.name:pid}. Repartidor disponible ${Number(available[pid]||0)}, requerido ${qty}. Inventario bodega ${bodega}. Si el producto salio a reparto, cargalo primero en Control productos repartidor.`);
-      }
-    }else{
-      addInventoryDelta(out,pid,-qty);
-    }
+    const qty=Number(d.stockDelta||0),pid=d.productId;
+    const fromCourier=Math.min(qty,Math.max(0,Number(available[pid]||0)));
+    const fromWarehouse=qty-fromCourier;
+    if(fromCourier>0)addQty(courierSold,pid,fromCourier);
+    if(fromWarehouse>0)addInventoryDelta(out,pid,-fromWarehouse);
   });
+  sale.courierSoldDeltas=Object.fromEntries(Object.entries(courierSold).map(([pid,qty])=>[pid,{productId:pid,qty}]));
   return out;
+}
+function existingSaleWarehouseDeltas(sale){
+  if((sale||{}).warehouseDeltas)return sale.warehouseDeltas;
+  const req=saleInventoryDeltas((sale||{}).items||[],1),out={},courierSold=(sale||{}).courierSoldDeltas||{};
+  if(Object.keys(courierSold).length){
+    Object.values(req).forEach(d=>{
+      const fromCourier=Number((courierSold[d.productId]||{}).qty||0);
+      const fromWarehouse=Math.max(0,Number(d.stockDelta||0)-fromCourier);
+      if(fromWarehouse>0)addInventoryDelta(out,d.productId,-fromWarehouse);
+    });
+    return out;
+  }
+  return saleInventoryDeltas((sale||{}).items||[],-1);
 }
 function invertInventoryDeltas(deltas){
   const out={};
   Object.values(deltas||{}).forEach(d=>addInventoryDelta(out,d.productId,-Number(d.stockDelta||0),d));
   return out;
+}
+function applyInventoryDeltasLocal(deltas,bid=branchId()){
+  Object.values(deltas||{}).forEach(d=>{
+    let r=inventoryRow(d.productId,bid);
+    if(!r){r={branchId:bid,productId:d.productId,stock:0,cost:0,min:0};state.inventory.push(r)}
+    const newStock=Number(r.stock||0)+Number(d.stockDelta||0);
+    const p=product(d.productId);
+    if(newStock<0)throw new Error(`Stock insuficiente: ${p?p.name:d.productId}. Disponible ${Number(r.stock||0)}, movimiento ${Number(d.stockDelta||0)}`);
+    r.stock=newStock;
+    if(d.cost!==undefined&&Number(d.cost)>0)r.cost=Number(d.cost);
+    if(d.min!==undefined)r.min=Number(d.min||0);
+  });
 }
 function courierControlSummary(date=controlDate(),cid=selectedControlCourierId(),bid=branchId()){
   const loads=courierMovementMap('load',date,cid,bid),returns=courierMovementMap('return',date,cid,bid),sold=soldMapForCourier(date,cid,bid);
@@ -1184,7 +1214,7 @@ async function saveCourierMovement(type){
   if(!pid)return alert('Elige producto');
   if(qty<=0)return alert('Cantidad requerida');
   const c=state.couriers.find(x=>x.id===cid)||{};
-  const movement={id:uid(),branchId:bid,date,courierId:cid,courierName:c.name||cid,productId:pid,qty,type,source:'manual',time:nowTime(),user:state.currentUser.name,createdAt:Date.now()};
+  const movement={id:uid(),branchId:bid,date,courierId:cid,courierName:c.name||cid,productId:pid,qty,type,source:'manual',time:nowTime(),user:state.currentUser.name,createdAt:Date.now(),returnedToInventory:type==='return',closed:type==='return'};
   const deltas={};addInventoryDelta(deltas,pid,type==='load'?-qty:qty);
   try{
     await cloudCommitInventoryDeltas(bid,deltas,{courierMovements:[movement]});
@@ -1252,7 +1282,7 @@ async function returnCourierRemaining(){
   const movements=rows.map(r=>({
     id:uid(),branchId:bid,date,courierId:cid,courierName:c.name||cid,
     productId:r.productId,qty:r.qty,type:'return',source:'autoRemaining',
-    time,user:state.currentUser.name,createdAt:now
+    time,user:state.currentUser.name,createdAt:now,returnedToInventory:true,closed:true
   }));
   const deltas={};movements.forEach(m=>addInventoryDelta(deltas,m.productId,m.qty));
   try{
@@ -1732,7 +1762,7 @@ async function syncPendingSales(){
   const pending=(state.sales||[]).filter(s=>s.syncStatus&&s.syncStatus!=='synced');
   for(const sale of pending){
     try{
-      const deltas=sale.warehouseDeltas||saleWarehouseDeltasForCourier(sale);
+      const deltas=existingSaleWarehouseDeltas(sale);
       sale.warehouseDeltas=deltas;
       const rows=await cloudCommitInventoryDeltas(sale.branchId,deltas,{sale});
       applyCostsFromInventoryRows(sale.items,rows);
@@ -1772,7 +1802,7 @@ cloudLoadAll=async function(){
     state.courierMovements=Array.isArray(courierMovements)?courierMovements:[];
     pendingSales.forEach(s=>{
       if(!(sales||[]).some(x=>x.id===s.id)){
-        (s.items||[]).forEach(i=>applyStock(i.components,-Number(i.qty||1),s.branchId));
+        try{applyInventoryDeltasLocal(existingSaleWarehouseDeltas(s),s.branchId)}catch(e){console.error('Pendiente local no aplicado',e)}
       }
     });
     repairStateTextEncoding();
@@ -1932,7 +1962,7 @@ saveSale=async function(){
     const editedSale={...oldSale,courierId:rep.id,courierName:rep.name,items:cloneData(state.cart),subtotal:cartSubtotal(),transbankFee:transbankFee(),total,paymentMode:state.paymentMode,payments,editedAt:Date.now(),editedBy:state.currentUser.name,syncStatus:'pendingEdit'};
     if(canUseFirebase()){
       try{
-        const oldDeltas=oldSale.warehouseDeltas||saleInventoryDeltas(oldSale.items,-1);
+        const oldDeltas=existingSaleWarehouseDeltas(oldSale);
         const newDeltas=saleWarehouseDeltasForCourier(editedSale,oldSale.id);
         editedSale.warehouseDeltas=newDeltas;
         const deltas=mergeInventoryDeltas(invertInventoryDeltas(oldDeltas),newDeltas);
@@ -1945,12 +1975,16 @@ saveSale=async function(){
         console.error(e);return alert(inventoryErrorMessage(e));
       }
     }else{
-      const problems=stockProblemsForRequirements(stockRequirements(state.cart),oldSale.branchId,stockCreditFromSale(oldSale));
-      if(problems.length)return alert(stockProblemMessage(problems));
-      oldSale.items.forEach(i=>applyStock(i.components,Number(i.qty||1),oldSale.branchId));
-      editedSale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),editedSale.branchId));
-      state.sales[idx]=editedSale;
-      state.cart=[];state.editSaleId=null;state.view='libro';saveLocal();render();toast('Venta editada localmente. Pendiente Firebase.');
+      try{
+        const oldDeltas=existingSaleWarehouseDeltas(oldSale);
+        const newDeltas=saleWarehouseDeltasForCourier(editedSale,oldSale.id);
+        editedSale.warehouseDeltas=newDeltas;
+        applyInventoryDeltasLocal(mergeInventoryDeltas(invertInventoryDeltas(oldDeltas),newDeltas),editedSale.branchId);
+        state.sales[idx]=editedSale;
+        state.cart=[];state.editSaleId=null;state.view='libro';saveLocal();render();toast('Venta editada localmente. Pendiente Firebase.');
+      }catch(e){
+        console.error(e);return alert(inventoryErrorMessage(e));
+      }
     }
     return;
   }
@@ -1967,10 +2001,14 @@ saveSale=async function(){
       console.error(e);return alert(inventoryErrorMessage(e));
     }
   }else{
-    const problems=stockProblemsForRequirements(stockRequirements(sale.items),sale.branchId);
-    if(problems.length)return alert(stockProblemMessage(problems));
-    sale.items.forEach(i=>applyStock(i.components,-Number(i.qty||1),sale.branchId));
-    state.sales.push(sale);state.cart=[];state.selectedHistoryDate=state.activeDate;state.view='libro';saveLocal();render();toast('Pedido guardado local. Pendiente Firebase.');
+    try{
+      const deltas=saleWarehouseDeltasForCourier(sale);
+      sale.warehouseDeltas=deltas;
+      applyInventoryDeltasLocal(deltas,sale.branchId);
+      state.sales.push(sale);state.cart=[];state.selectedHistoryDate=state.activeDate;state.view='libro';saveLocal();render();toast('Pedido guardado local. Pendiente Firebase.');
+    }catch(e){
+      console.error(e);return alert(inventoryErrorMessage(e));
+    }
   }
 }
 deleteSale=async function(id){
@@ -1980,13 +2018,13 @@ deleteSale=async function(id){
   if(s.branchId!==branchId())return alert('No puedes borrar pedidos de otra sucursal');
   if(canUseFirebase()){
     try{
-      await cloudCommitInventoryDeltas(s.branchId,invertInventoryDeltas(s.warehouseDeltas||saleInventoryDeltas(s.items,-1)),{deleteSaleId:id});
+      await cloudCommitInventoryDeltas(s.branchId,invertInventoryDeltas(existingSaleWarehouseDeltas(s)),{deleteSaleId:id});
       state.sales.splice(idx,1);saveLocal();renderLibro();toast('Venta borrada');
     }catch(e){
       console.error(e);return alert(inventoryErrorMessage(e));
     }
   }else{
-    s.items.forEach(i=>applyStock(i.components,Number(i.qty||1),s.branchId));
+    applyInventoryDeltasLocal(invertInventoryDeltas(existingSaleWarehouseDeltas(s)),s.branchId);
     state.sales.splice(idx,1);saveLocal();renderLibro();toast('Venta borrada localmente');
   }
 }
