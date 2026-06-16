@@ -658,6 +658,49 @@ function visible(view){
   return false;
 }
 function product(id){return state.products.find(p=>p.id===id)}
+function productBaseOrder(id){const idx=BASE_PRODUCTS.findIndex(p=>p.id===id);return idx>=0?idx:9999}
+function productOperationalGroup(p){
+  const cat=String(p?.category||''),name=normProductName(p?.name);
+  if(cat==='Bebidas'){
+    const size=beverageDrinkSize(p);
+    if(size==='1.5')return 1;
+    if(size==='3')return 2;
+    return 3;
+  }
+  if(cat==='Piscos')return 4;
+  if(cat==='Whisky')return 5;
+  if(cat==='Otros licores')return 6;
+  if(cat==='Cervezas')return 7;
+  if(cat==='Vinos')return 8;
+  if(cat==='Cócteles'||cat==='Cocteles')return 9;
+  if(cat==='Cigarros')return 10;
+  if(cat==='Extras')return 11;
+  if(cat==='Reparto')return 12;
+  return name.includes('redbull')||name.includes('red bull')||name.includes('gatorade')||name.includes('jugo')||name.includes('agua')?3:13;
+}
+function sortProductsOperational(products){
+  return [...(products||[])].sort((a,b)=>
+    productOperationalGroup(a)-productOperationalGroup(b)||
+    productBaseOrder(a.id)-productBaseOrder(b.id)||
+    String(a.name||'').localeCompare(String(b.name||''),'es')
+  );
+}
+function sortInventoryRowsOperational(rows){
+  return [...(rows||[])].sort((a,b)=>{
+    const pa=product(a.productId),pb=product(b.productId);
+    return productOperationalGroup(pa)-productOperationalGroup(pb)||
+      productBaseOrder(a.productId)-productBaseOrder(b.productId)||
+      String(pa?.name||a.productId).localeCompare(String(pb?.name||b.productId),'es');
+  });
+}
+function sortProductIdRowsOperational(rows,key='productId'){
+  return [...(rows||[])].sort((a,b)=>{
+    const aid=a?.[key],bid=b?.[key],pa=product(aid),pb=product(bid);
+    return productOperationalGroup(pa)-productOperationalGroup(pb)||
+      productBaseOrder(aid)-productBaseOrder(bid)||
+      String(pa?.name||aid||'').localeCompare(String(pb?.name||bid||''),'es');
+  });
+}
 function inventoryRow(pid,bid=branchId()){return state.inventory.find(r=>r.branchId===bid&&r.productId===pid)}
 function getCost(pid,bid=branchId()){return Number((inventoryRow(pid,bid)||{}).cost||0)}
 function couriers(){return state.couriers.filter(c=>c.active&&c.branchId===branchId())}
@@ -858,7 +901,7 @@ function beverageDrinkSize(p){
 function promoOptions(p){
   if(p.specialProductId)return [product(p.specialProductId)].filter(Boolean);
   const size=String(p.drinkSize||'').trim();
-  return state.products.filter(x=>x.active!==false&&x.type==='simple'&&x.trackStock!==false&&x.category==='Bebidas'&&beverageDrinkSize(x)===size).sort((a,b)=>String(a.name).localeCompare(String(b.name),'es'));
+  return sortProductsOperational(state.products.filter(x=>x.active!==false&&x.type==='simple'&&x.trackStock!==false&&x.category==='Bebidas'&&beverageDrinkSize(x)===size));
 }
 function promoComponents(p,drinkId){const comps=[];if(p.baseProductId)comps.push({productId:p.baseProductId,qty:1,costAtSale:getCost(p.baseProductId)});if(p.specialProductId)comps.push({productId:p.specialProductId,qty:1,costAtSale:getCost(p.specialProductId)});else if(drinkId)comps.push({productId:drinkId,qty:1,costAtSale:getCost(drinkId)});const hielo=state.products.find(x=>String(x.name).trim().toLowerCase()==='hielo');if(hielo)comps.push({productId:hielo.id,qty:1,costAtSale:getCost(hielo.id)});return comps}
 function cartSubtotal(){return state.cart.reduce((a,i)=>a+Number(i.salePrice||0)*Number(i.qty||1),0)}
@@ -875,7 +918,7 @@ function addProductToCart(pid,drinkId=null){
 function showDrinkPicker(p){const opts=promoOptions(p);document.getElementById('view-venta').innerHTML=`<div class="card"><div class="row" style="margin-bottom:12px"><button class="btn btn-secondary" onclick="renderVenta()">← Atrás</button><h3 style="margin:0">Selecciona la bebida</h3></div><div class="muted small" style="margin-bottom:10px">${p.name} · incluye hielo automático</div><div class="grid3">${opts.map(d=>`<div class="prod" onclick="addProductToCart('${p.id}','${d.id}')"><div><b>${d.name}</b><div class="badge">Bebida</div></div><div class="price">Elegir</div></div>`).join('')}</div><button class="btn btn-secondary" style="margin-top:12px" onclick="renderVenta()">Volver</button></div>`}
 function renderVenta(){
   if(!canSell()){document.getElementById('view-venta').innerHTML='<div class="card"><h3>Venta rápida</h3><div class="muted">Usuario solo lectura.</div></div>';return}
-  const prods=activeProducts().filter(p=>p.category===state.category&&(!state.query||p.name.toLowerCase().includes(state.query.toLowerCase())));
+  const prods=sortProductsOperational(activeProducts().filter(p=>p.category===state.category&&(!state.query||p.name.toLowerCase().includes(state.query.toLowerCase()))));
   document.getElementById('view-venta').innerHTML=`<div class="grid2"><div>${state.editSaleId?'<div class="card" style="margin-bottom:12px;border:2px solid #f97316"><b>Editando venta existente</b><div class="muted small">Al guardar se mantiene la hora original.</div></div>':''}<div class="row" style="margin-bottom:12px"><input class="input" style="flex:1" placeholder="Buscar producto o promo" value="${state.query}" oninput="state.query=this.value;renderVenta()"><button class="btn btn-secondary">Toca productos para armar pedido</button></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.category===c?'active':''}" onclick="state.category='${c}';renderVenta()">${c}</button>`).join('')}</div><div class="grid3">${prods.map(p=>`<div class="prod" onclick="addProductToCart('${p.id}')"><div><b>${p.name}</b><div>${p.type==='promo'?'<span class="badge">Promo</span><span class="badge">Selecciona bebida</span>':'<span class="badge">Simple</span>'}</div></div><div class="price">${p.isVariablePrice?'Libre':clp(p.salePrice)}</div></div>`).join('')}</div></div><div class="card"><h3>Pedido actual</h3><div class="list">${state.cart.length?state.cart.map(i=>`<div class="item between"><div><b>${i.qty}x ${i.name}</b><div class="muted small">${clp(i.salePrice)}</div></div><button class="btn btn-danger" onclick="removeCart('${i.id}')">X</button></div>`).join(''):'<div class="muted">Sin productos aún.</div>'}</div><div class="item between"><span>Subtotal</span><b>${clp(cartSubtotal())}</b></div><label>Medio de pago</label><select class="input" onchange="state.paymentMode=this.value;renderVenta()"><option value="efectivo" ${state.paymentMode==='efectivo'?'selected':''}>Efectivo</option><option value="transferencia" ${state.paymentMode==='transferencia'?'selected':''}>Transferencia</option><option value="transbank" ${state.paymentMode==='transbank'?'selected':''}>Transbank</option><option value="mixto" ${state.paymentMode==='mixto'?'selected':''}>Mixto</option></select>${state.paymentMode==='mixto'?`<div class="row" style="margin-top:8px"><input class="input" style="flex:1" type="number" placeholder="Efectivo" value="${state.mixEf}" oninput="state.mixEf=Number(this.value||0)"><input class="input" style="flex:1" type="number" placeholder="Transfer." value="${state.mixTr}" oninput="state.mixTr=Number(this.value||0)"><input class="input" style="flex:1" type="number" placeholder="Transbank" value="${state.mixTb}" oninput="state.mixTb=Number(this.value||0)"></div>`:''}<label style="margin-top:8px">Repartidor</label><select class="input" onchange="setSelectedCourier(this.value);saveLocal()">${couriers().map(c=>`<option value="${c.id}" ${getSelectedCourier()===c.id?'selected':''}>${c.name}</option>`).join('')}</select><div class="item between"><span>Cargo Transbank</span><b>${clp(transbankFee())}</b></div><div class="item between"><span>Total</span><b>${clp(cartTotal())}</b></div><div class="row"><button class="btn btn-secondary" onclick="cancelCart()">Cancelar</button><button class="btn btn-primary" onclick="saveSale()">${state.editSaleId?'Guardar edición':'Guardar pedido'}</button></div></div></div>`
 }
 function removeCart(id){state.cart=state.cart.filter(i=>i.id!==id);renderVenta()}
@@ -885,7 +928,7 @@ renderVenta=function(){
     document.getElementById('view-venta').innerHTML='<div class="card"><h3>Venta rapida</h3><div class="muted">Usuario solo lectura.</div></div>';
     return;
   }
-  const prods=activeProducts().filter(p=>p.category===state.category&&(!state.query||p.name.toLowerCase().includes(state.query.toLowerCase())));
+  const prods=sortProductsOperational(activeProducts().filter(p=>p.category===state.category&&(!state.query||p.name.toLowerCase().includes(state.query.toLowerCase()))));
   const mixed=state.paymentMode==='mixto'?`<div class="grid3" style="margin-top:8px"><div><label>Efectivo</label><input class="input" type="number" value="${state.mixEf}" oninput="state.mixEf=Number(this.value||0)"></div><div><label>Transferencia</label><input class="input" type="number" value="${state.mixTr}" oninput="state.mixTr=Number(this.value||0)"></div><div><label>Transbank</label><input class="input" type="number" value="${state.mixTb}" oninput="state.mixTb=Number(this.value||0)"></div></div>`:'';
   document.getElementById('view-venta').innerHTML=`<div class="grid2"><div>${state.editSaleId?'<div class="card" style="margin-bottom:12px;border:2px solid #f97316"><b>Editando venta existente</b><div class="muted small">Al guardar se mantiene la hora original.</div></div>':''}<div class="row" style="margin-bottom:12px"><input class="input" style="flex:1" placeholder="Buscar producto o promo" value="${state.query}" oninput="state.query=this.value;renderVenta()"><button class="btn btn-secondary">Toca productos para armar pedido</button></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.category===c?'active':''}" onclick="state.category='${c}';renderVenta()">${c}</button>`).join('')}</div><div class="grid3">${prods.map(p=>`<div class="prod" onclick="addProductToCart('${p.id}')"><div><b>${p.name}</b><div>${p.type==='promo'?'<span class="badge">Promo</span><span class="badge">Selecciona bebida</span>':'<span class="badge">Simple</span>'}</div></div><div class="price">${p.isVariablePrice?'Libre':clp(p.salePrice)}</div></div>`).join('')}</div></div><div class="card"><h3>Pedido actual</h3><div class="list">${state.cart.length?state.cart.map(i=>`<div class="item between"><div><b>${i.qty}x ${i.name}</b><div class="muted small">${clp(i.salePrice)}</div></div><button class="btn btn-danger" onclick="removeCart('${i.id}')">X</button></div>`).join(''):'<div class="muted">Sin productos aun.</div>'}</div><div class="item between"><span>Subtotal</span><b>${clp(cartSubtotal())}</b></div><label>Medio de pago</label><select class="input" onchange="state.paymentMode=this.value;renderVenta()"><option value="efectivo" ${state.paymentMode==='efectivo'?'selected':''}>Efectivo</option><option value="transferencia" ${state.paymentMode==='transferencia'?'selected':''}>Transferencia</option><option value="transbank" ${state.paymentMode==='transbank'?'selected':''}>Transbank</option><option value="mixto" ${state.paymentMode==='mixto'?'selected':''}>Mixto</option></select>${mixed}<label style="margin-top:8px">Repartidor</label><select class="input" onchange="setSelectedCourier(this.value);saveLocal()">${couriers().map(c=>`<option value="${c.id}" ${getSelectedCourier()===c.id?'selected':''}>${c.name}</option>`).join('')}</select><div class="item between"><span>Cargo Transbank</span><b>${clp(transbankFee())}</b></div><div class="item between"><span>Total</span><b>${clp(cartTotal())}</b></div><div class="row"><button class="btn btn-secondary" onclick="cancelCart()">Cancelar</button><button class="btn btn-primary" onclick="saveSale()">${state.editSaleId?'Guardar edicion':'Guardar pedido'}</button></div></div></div>`;
 }
@@ -1225,8 +1268,8 @@ function selectControlRepProduct(pid){const el=document.getElementById('crProd')
 function renderControlRepartidor(){
   const cid=selectedControlCourierId(),date=controlDate(),edit=canControlCouriers()&&branchId()!=='all';
   const cList=couriers();
-  const prods=state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase())));
-  const summaryRows=courierControlSummary(date,cid);
+  const prods=sortProductsOperational(state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase()))));
+  const summaryRows=sortProductIdRowsOperational(courierControlSummary(date,cid));
   const missingValue=summaryRows.reduce((a,r)=>a+(r.diff<0?Math.abs(r.diff)*Number(product(r.productId)?.salePrice||0):0),0);
   const tabs=`<div class="row" style="margin:10px 0"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.controlRepQuery||''}" oninput="state.controlRepQuery=this.value;renderControlRepartidor()"></div><div class="tabs">${state.categories.filter(c=>c!=='Reparto').map(cat=>`<button class="tab ${state.controlRepCategory===cat?'active':''}" onclick="state.controlRepCategory='${cat}';state.controlRepQuery='';renderControlRepartidor()">${cat}</button>`).join('')}</div>`;
   document.getElementById('view-controlRep').innerHTML=`<div class="grid2"><div class="card"><h3>Control productos repartidor</h3>${navDate(date,'setControlRepDate')}<label>Repartidor</label><select class="input" onchange="state.controlRepCourierId=this.value;saveLocal();renderControlRepartidor()">${cList.map(c=>`<option value="${c.id}" ${cid===c.id?'selected':''}>${c.name}</option>`).join('')}</select>${edit?`<div style="margin-top:10px"><button class="btn btn-primary" onclick="applyCourierBaseLoad()" ${baseLoadApplied(date,cid)?'disabled':''}>Aplicar carga base</button></div><label style="margin-top:12px">Producto</label>${tabs}<select id="crProd" class="input">${prods.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><div class="grid3" style="margin-top:10px"><input id="crQty" class="input" type="number" value="1"><button class="btn btn-secondary" onclick="saveCourierMovement('load')">Cargar extra</button><button class="btn btn-primary" onclick="saveCourierMovement('return')">Registrar devoluci?n</button></div><div class="grid3" style="margin-top:10px">${prods.map(p=>`<div class="prod" onclick="selectControlRepProduct('${p.id}')"><div><b>${p.name}</b><div class="badge">${p.category}</div></div><div class="price">Elegir</div></div>`).join('')||'<div class="muted">Sin productos.</div>'}</div>`:'<div class="muted" style="margin-top:10px">Vista solo lectura.</div>'}</div><div class="card"><h3>Cuadre del repartidor</h3><div class="item between"><span>Diferencia valorizada faltante</span><b class="${missingValue?'red':'green'}">${clp(missingValue)}</b></div><table class="table"><thead><tr><th align="left">Producto</th><th align="right">Entregado</th><th align="right">Vendido</th><th align="right">Debe devolver</th><th align="right">Devuelto</th><th align="right">Dif.</th></tr></thead><tbody>${summaryRows.map(r=>`<tr><td>${product(r.productId)?.name||r.productId}</td><td align="right">${r.delivered}</td><td align="right">${r.sold}</td><td align="right">${r.expected}</td><td align="right">${r.returned}</td><td align="right" class="${r.diff<0?'red':r.diff>0?'green':''}">${r.diff}</td></tr>`).join('')}</tbody></table></div></div>`
@@ -1294,9 +1337,9 @@ async function returnCourierRemaining(){
 renderControlRepartidor=function(){
   const cid=selectedControlCourierId(),date=controlDate(),bid=branchId(),edit=canControlCouriers()&&bid!=='all';
   const cList=couriers();
-  const prods=state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase())));
-  const summaryRows=courierControlSummary(date,cid);
-  const baseRows=courierBaseRows();
+  const prods=sortProductsOperational(state.products.filter(p=>p.active!==false&&p.type==='simple'&&p.trackStock!==false&&p.category===state.controlRepCategory&&(!state.controlRepQuery||p.name.toLowerCase().includes(state.controlRepQuery.toLowerCase()))));
+  const summaryRows=sortProductIdRowsOperational(courierControlSummary(date,cid));
+  const baseRows=sortProductIdRowsOperational(courierBaseRows());
   const movementRows=[
     ...courierMovementRows(date,cid).map(m=>({...m,kind:'movement'})),
     ...(state.sales||[])
@@ -1315,15 +1358,15 @@ renderControlRepartidor=function(){
 }
 
 function renderInventario(){
-  const rows=state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()),edit=canManage();
-  document.getElementById('view-inventario').innerHTML=`${edit?`<div class="card"><h3>Ajuste de inventario</h3><div class="grid3"><div><label>Producto</label><select id="invProd" class="input">${state.products.filter(p=>p.type==='simple'&&p.trackStock!==false).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label>Acción</label><select id="invAction" class="input"><option value="add">Agregar stock</option><option value="sub">Quitar stock</option></select></div><div><label>Cantidad</label><input id="invQty" class="input" type="number" value="1"></div><div><label>Stock mínimo</label><input id="invMin" class="input" type="number" value="0"></div><div><label>Costo unitario</label><input id="invCost" class="input" type="number" value="0"></div></div><button class="btn btn-primary" style="margin-top:12px" onclick="adjustInventory()">Guardar ajuste</button></div>`:`<div class="card"><h3>Inventario</h3><div class="muted">Vista solo lectura.</div></div>`}<div class="grid3" style="margin-top:14px">${rows.map(r=>{const p=product(r.productId);return `<div class="item between"><div><b>${p?p.name:r.productId}</b><div class="muted small">${branchName(r.branchId)} · ${canSeeFinancial()?`Costo: ${clp(r.cost)} · `:''}Mínimo: ${r.min}</div></div><b class="${Number(r.stock)<=Number(r.min)?'red':'green'}">${r.stock}</b></div>`}).join('')||'<div class="card muted">No hay inventario.</div>'}</div>`
+  const rows=sortInventoryRowsOperational(state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId())),edit=canManage();
+  document.getElementById('view-inventario').innerHTML=`${edit?`<div class="card"><h3>Ajuste de inventario</h3><div class="grid3"><div><label>Producto</label><select id="invProd" class="input">${sortProductsOperational(state.products.filter(p=>p.type==='simple'&&p.trackStock!==false)).map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label>Acción</label><select id="invAction" class="input"><option value="add">Agregar stock</option><option value="sub">Quitar stock</option></select></div><div><label>Cantidad</label><input id="invQty" class="input" type="number" value="1"></div><div><label>Stock mínimo</label><input id="invMin" class="input" type="number" value="0"></div><div><label>Costo unitario</label><input id="invCost" class="input" type="number" value="0"></div></div><button class="btn btn-primary" style="margin-top:12px" onclick="adjustInventory()">Guardar ajuste</button></div>`:`<div class="card"><h3>Inventario</h3><div class="muted">Vista solo lectura.</div></div>`}<div class="grid3" style="margin-top:14px">${rows.map(r=>{const p=product(r.productId);return `<div class="item between"><div><b>${p?p.name:r.productId}</b><div class="muted small">${branchName(r.branchId)} · ${canSeeFinancial()?`Costo: ${clp(r.cost)} · `:''}Mínimo: ${r.min}</div></div><b class="${Number(r.stock)<=Number(r.min)?'red':'green'}">${r.stock}</b></div>`}).join('')||'<div class="card muted">No hay inventario.</div>'}</div>`
 }
 function adjustInventory(){if(!canManage())return alert('Sin permiso');const pid=document.getElementById('invProd').value,act=document.getElementById('invAction').value,qty=Number(document.getElementById('invQty').value||0),min=Number(document.getElementById('invMin').value||0),cost=Number(document.getElementById('invCost').value||0);if(!pid)return alert('Elige un producto');let r=inventoryRow(pid);if(!r){r={branchId:branchId(),productId:pid,stock:0,cost:0,min:0};state.inventory.push(r)}if(act==='sub'&&Number(r.stock||0)<qty)return alert(stockProblemMessage([`${product(pid)?.name||pid}: disponible ${Number(r.stock||0)}, requerido ${qty}`]));r.stock=Number(r.stock||0)+(act==='add'?qty:-qty);r.min=min;if(cost>0)r.cost=cost;cloudSaveInventoryRow(r);saveLocal();renderInventario()}
 
 renderInventario=function(){
   const edit=canManage();
-  const invProducts=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase())));
-  const rows=state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()).filter(r=>{const p=product(r.productId);return p&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase()))});
+  const invProducts=sortProductsOperational(state.products.filter(p=>p.type==='simple'&&p.trackStock!==false&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase()))));
+  const rows=sortInventoryRowsOperational(state.inventory.filter(r=>branchId()==='all'||r.branchId===branchId()).filter(r=>{const p=product(r.productId);return p&&p.category===state.invCategory&&(!state.invQuery||p.name.toLowerCase().includes(state.invQuery.toLowerCase()))}));
   const tabs=`<div class="row" style="margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.invQuery||''}" oninput="state.invQuery=this.value;renderInventario()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.invCategory===c?'active':''}" onclick="state.invCategory='${c}';state.invQuery='';renderInventario()">${c}</button>`).join('')}</div>`;
   document.getElementById('view-inventario').innerHTML=`${edit?`<div class="card"><h3>Ajuste de inventario</h3>${tabs}<div class="grid3"><div><label>Producto</label><select id="invProd" class="input">${invProducts.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div><div><label>Accion</label><select id="invAction" class="input"><option value="add">Agregar stock</option><option value="sub">Quitar stock</option></select></div><div><label>Cantidad</label><input id="invQty" class="input" type="number" value="1"></div><div><label>Stock minimo</label><input id="invMin" class="input" type="number" value="0"></div><div><label>Costo unitario</label><input id="invCost" class="input" type="number" value="0"></div></div><button class="btn btn-primary" style="margin-top:12px" onclick="adjustInventory()">Guardar ajuste</button></div>`:`<div class="card"><h3>Inventario</h3>${tabs}<div class="muted">Vista solo lectura.</div></div>`}<div class="grid3" style="margin-top:14px">${rows.map(r=>{const p=product(r.productId);return `<div class="item between"><div><b>${p?p.name:r.productId}</b><div class="muted small">${branchName(r.branchId)} · ${canSeeFinancial()?`Costo: ${clp(r.cost)} · `:''}Minimo: ${r.min}</div></div><b class="${Number(r.stock)<=Number(r.min)?'red':'green'}">${r.stock}</b></div>`}).join('')||'<div class="card muted">No hay inventario en esta categoria.</div>'}</div>`
 }
@@ -1334,7 +1377,7 @@ function renderFacturas(){
   const currentType=invoiceTypeValue(state.invoiceType);
   const capitalTotal=invs.filter(f=>invoiceTypeValue(f.type)==='capitalInicial').reduce((a,f)=>a+Number(f.total||0),0);
   const reposicionTotal=invs.filter(f=>invoiceTypeValue(f.type)==='reposicion').reduce((a,f)=>a+Number(f.total||0),0);
-  const facProducts=state.products.filter(p=>p.active!==false&&p.category===state.facCategory&&(!state.facQuery||p.name.toLowerCase().includes(state.facQuery.toLowerCase())));
+  const facProducts=sortProductsOperational(state.products.filter(p=>p.active!==false&&p.category===state.facCategory&&(!state.facQuery||p.name.toLowerCase().includes(state.facQuery.toLowerCase()))));
   const facStockProducts=facProducts.filter(invoiceSelectableProduct);
   const facTabs=`<div class="row" style="margin-top:8px;margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.facQuery||''}" oninput="state.facQuery=this.value;renderFacturas()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.facCategory===c?'active':''}" onclick="state.facCategory='${c}';state.facQuery='';renderFacturas()">${c}</button>`).join('')}</div>`;
   document.getElementById('view-facturas').innerHTML=`<div class="grid2">
@@ -1503,7 +1546,7 @@ function saveInvoice(){
 
 function renderProductos(){
   document.getElementById('view-productos').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar categoría</h3>${canManage()?`<input id="newCat" class="input" placeholder="Ej: Energéticas"><button class="btn btn-primary" style="margin-top:10px" onclick="addCategory()">Guardar categoría</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Agregar producto</h3>${canManage()?`<label>Nombre</label><input id="npName" class="input"><label>Categoría</label><select id="npCat" class="input">${state.categories.map(c=>`<option>${c}</option>`).join('')}</select><label>Precio venta</label><input id="npPrice" type="number" class="input" value="0"><button class="btn btn-primary" style="margin-top:10px" onclick="addProductManual()">Guardar producto</button>`:'<div class="muted">Solo lectura.</div>'}</div></div>
-  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3><div class="list">${state.products.map(p=>`<div class="item">
+  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3><div class="list">${sortProductsOperational(state.products).map(p=>`<div class="item">
     <div class="between">
       <div><b>${p.name}</b><div class="muted small">${p.category} · ${p.type}</div></div>
       <div style="min-width:180px">${canManage()?`<label>Precio venta</label><input class="input" type="number" value="${p.salePrice}" onchange="updateProductPrice('${p.id}',this.value)">`:`<b>${clp(p.salePrice)}</b>`}</div>
@@ -1523,9 +1566,9 @@ function addCategory(){if(!canManage())return;const c=document.getElementById('n
 function addProductManual(){if(!canManage())return;const name=document.getElementById('npName').value.trim();if(!name)return;state.products.push({id:uid(),name,category:document.getElementById('npCat').value,salePrice:Number(document.getElementById('npPrice').value||0),type:'simple',active:true,trackStock:true});seedInventory();cloudSaveConfig();cloudSaveAllInventory();saveLocal();renderProductos()}
 
 renderProductos=function(){
-  const simpleStock=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false);
+  const simpleStock=sortProductsOperational(state.products.filter(p=>p.type==='simple'&&p.trackStock!==false));
   document.getElementById('view-productos').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar categoria</h3>${canManage()?`<input id="newCat" class="input" placeholder="Ej: Energeticas"><button class="btn btn-primary" style="margin-top:10px" onclick="addCategory()">Guardar categoria</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Agregar producto</h3>${canManage()?`<label>Nombre</label><input id="npName" class="input"><label>Tipo</label><select id="npType" class="input"><option value="simple">Producto simple</option><option value="promo">Combo / promo con bebida</option></select><label>Categoria</label><select id="npCat" class="input">${state.categories.map(c=>`<option>${c}</option>`).join('')}</select><label>Precio venta</label><input id="npPrice" type="number" class="input" value="0"><label>Producto base del combo</label><select id="npBase" class="input"><option value="">Sin base</option>${simpleStock.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><label>Tamano bebida del combo</label><select id="npDrinkSize" class="input"><option value="1.5">Bebida 1.5lt</option><option value="3">Bebida 3lt</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addProductManual()">Guardar producto</button>`:'<div class="muted">Solo lectura.</div>'}</div></div>
-  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3><div class="list">${state.products.map(p=>`<div class="item">
+  <div class="card" style="margin-top:14px"><h3>Productos cargados</h3><div class="list">${sortProductsOperational(state.products).map(p=>`<div class="item">
     <div class="between">
       <div><b>${p.name}</b><div class="muted small">${p.category} · ${p.type}${p.type==='promo'?` · base: ${product(p.baseProductId)?.name||p.baseProductId||'-'} · bebida ${p.drinkSize||'-'} · hielo automatico`:''}</div></div>
       <div style="min-width:180px">${canManage()?`<label>Precio venta</label><input class="input" type="number" value="${p.salePrice}" onchange="updateProductPrice('${p.id}',this.value)">`:`<b>${clp(p.salePrice)}</b>`}</div>
@@ -1556,8 +1599,8 @@ addProductManual=function(){
   renderProductos();
 }
 renderProductos=function(){
-  const simpleStock=state.products.filter(p=>p.type==='simple'&&p.trackStock!==false);
-  const shown=state.products.filter(p=>p.category===state.prodCategory&&(!state.prodQuery||p.name.toLowerCase().includes(state.prodQuery.toLowerCase())));
+  const simpleStock=sortProductsOperational(state.products.filter(p=>p.type==='simple'&&p.trackStock!==false));
+  const shown=sortProductsOperational(state.products.filter(p=>p.category===state.prodCategory&&(!state.prodQuery||p.name.toLowerCase().includes(state.prodQuery.toLowerCase()))));
   const menu=`<div class="row" style="margin-bottom:10px"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.prodQuery||''}" oninput="state.prodQuery=this.value;renderProductos()"></div><div class="tabs">${state.categories.map(c=>`<button class="tab ${state.prodCategory===c?'active':''}" onclick="state.prodCategory='${c}';state.prodQuery='';renderProductos()">${c}</button>`).join('')}</div>`;
   document.getElementById('view-productos').innerHTML=`<div class="grid2"><div class="card"><h3>Agregar categoria</h3>${canManage()?`<input id="newCat" class="input" placeholder="Ej: Energeticas"><button class="btn btn-primary" style="margin-top:10px" onclick="addCategory()">Guardar categoria</button>`:'<div class="muted">Solo lectura.</div>'}</div><div class="card"><h3>Agregar producto</h3>${canManage()?`<label>Nombre</label><input id="npName" class="input"><label>Tipo</label><select id="npType" class="input"><option value="simple">Producto simple</option><option value="promo">Combo / promo con bebida</option></select><label>Categoria</label><select id="npCat" class="input">${state.categories.map(c=>`<option ${state.prodCategory===c?'selected':''}>${c}</option>`).join('')}</select><label>Precio venta</label><input id="npPrice" type="number" class="input" value="0"><label>Producto base del combo</label><select id="npBase" class="input"><option value="">Sin base</option>${simpleStock.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><label>Tamano bebida del combo</label><select id="npDrinkSize" class="input"><option value="1.5">Bebida 1.5lt</option><option value="3">Bebida 3lt</option></select><button class="btn btn-primary" style="margin-top:10px" onclick="addProductManual()">Guardar producto</button>`:'<div class="muted">Solo lectura.</div>'}</div></div>
   <div class="card" style="margin-top:14px"><h3>Productos cargados</h3>${menu}<div class="list">${shown.map(p=>`<div class="item">
