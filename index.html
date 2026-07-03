@@ -85,7 +85,7 @@ input,select,button{font:inherit}label{display:block;font-size:12px;color:var(--
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp, writeBatch, runTransaction
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp, writeBatch, runTransaction, query, where
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -111,6 +111,8 @@ window.FONO_FIREBASE = {
   serverTimestamp,
   writeBatch,
   runTransaction,
+  query,
+  where,
   ready: true
 };
 
@@ -379,6 +381,107 @@ async function waitFirebaseReady(){
 function canUseFirebase(){
   return !ZERO_TEST_MODE && !!(window.FONO_FIREBASE && window.FONO_FIREBASE.ready);
 }
+let cloudConfigLoaded=false;
+const cloudLoadedScopes=new Set();
+function cloudFilterKey(name,filters=[]){
+  return `${name}|${filters.map(f=>f.join(':')).join('|')||'all'}`;
+}
+function cloudBranchFilters(bid=branchId()){
+  return bid&&bid!=='all'?[['branchId','==',bid]]:[];
+}
+async function cloudQueryRows(name,filters=[]){
+  if(!canUseFirebase()) return [];
+  const f=window.FONO_FIREBASE;
+  if(filters.length&&(!f.query||!f.where)){
+    return cloudLoadCollection(name);
+  }
+  const base=f.collection(f.db,name);
+  const ref=filters.length?f.query(base,...filters.map(([field,op,value])=>f.where(field,op,value))):base;
+  const snap=await f.getDocs(ref);
+  const rows=[];
+  snap.forEach(d=>rows.push(d.data()));
+  return rows;
+}
+async function cloudLoadCollectionFiltered(name,filters=[],scopeKey=''){
+  const key=scopeKey||cloudFilterKey(name,filters);
+  if(key&&cloudLoadedScopes.has(key)) return null;
+  const rows=await cloudQueryRows(name,filters);
+  if(key)cloudLoadedScopes.add(key);
+  return rows;
+}
+function replaceRowsForBranch(key,rows,bid=branchId()){
+  const incoming=Array.isArray(rows)?rows:[];
+  if(bid&&bid!=='all'){
+    state[key]=(state[key]||[]).filter(r=>r.branchId!==bid).concat(incoming);
+  }else{
+    state[key]=incoming;
+  }
+}
+function replaceRowsForBranchDate(key,rows,bid=branchId(),date=state.activeDate){
+  const incoming=Array.isArray(rows)?rows:[];
+  state[key]=(state[key]||[]).filter(r=>!(r.date===date&&(!bid||bid==='all'||r.branchId===bid))).concat(incoming);
+}
+async function cloudLoadInventoryForBranch(bid=branchId()){
+  if(!canUseFirebase()) return;
+  if(!bid||bid==='all'){
+    await cloudLoadInventory();
+    return;
+  }
+  const rows=await cloudLoadCollectionFiltered('inventory',[['branchId','==',bid]],`inventory|branch|${bid}`);
+  if(Array.isArray(rows))replaceRowsForBranch('inventory',rows,bid);
+  seedInventory();
+}
+async function cloudLoadDayData(date=state.activeDate,bid=branchId()){
+  if(!canUseFirebase()) return;
+  const filters=[...cloudBranchFilters(bid),['date','==',date]];
+  const scope=`day|${bid||'all'}|${date}`;
+  if(cloudLoadedScopes.has(`history|${bid||'all'}`)) return;
+  if(cloudLoadedScopes.has(scope)) return;
+  const [sales,closures,courierMovements]=await Promise.all([
+    cloudLoadCollectionFiltered('sales',filters,`${scope}|sales`),
+    cloudLoadCollectionFiltered('closures',filters,`${scope}|closures`),
+    cloudLoadCollectionFiltered('courierMovements',filters,`${scope}|courierMovements`)
+  ]);
+  if(Array.isArray(sales))replaceRowsForBranchDate('sales',sales,bid,date);
+  if(Array.isArray(closures))replaceRowsForBranchDate('closures',closures,bid,date);
+  if(Array.isArray(courierMovements))replaceRowsForBranchDate('courierMovements',courierMovements,bid,date);
+  cloudLoadedScopes.add(scope);
+}
+async function cloudLoadCapitalResetsForBranch(bid=branchId()){
+  const rows=await cloudLoadCollectionFiltered('capitalResets',cloudBranchFilters(bid),`capitalResets|branch|${bid||'all'}`);
+  if(Array.isArray(rows))replaceRowsForBranch('capitalResets',rows,bid);
+}
+async function cloudLoadHistoricalForBranch(bid=branchId(),reason=''){
+  if(!canUseFirebase()) return;
+  const scope=`history|${bid||'all'}`;
+  if(cloudLoadedScopes.has(scope)) return;
+  const filters=cloudBranchFilters(bid);
+  const [sales,invoices,closures,capitalResets,monthlyExpenses,courierMovements]=await Promise.all([
+    cloudLoadCollectionFiltered('sales',filters,`${scope}|sales`),
+    cloudLoadCollectionFiltered('invoices',filters,`${scope}|invoices`),
+    cloudLoadCollectionFiltered('closures',filters,`${scope}|closures`),
+    cloudLoadCollectionFiltered('capitalResets',filters,`${scope}|capitalResets`),
+    cloudLoadCollectionFiltered('monthlyExpenses',filters,`${scope}|monthlyExpenses`),
+    cloudLoadCollectionFiltered('courierMovements',filters,`${scope}|courierMovements`)
+  ]);
+  if(Array.isArray(sales))replaceRowsForBranch('sales',sales,bid);
+  if(Array.isArray(invoices))replaceRowsForBranch('invoices',invoices,bid);
+  if(Array.isArray(closures))replaceRowsForBranch('closures',closures,bid);
+  if(Array.isArray(capitalResets))replaceRowsForBranch('capitalResets',capitalResets,bid);
+  if(Array.isArray(monthlyExpenses))replaceRowsForBranch('monthlyExpenses',monthlyExpenses,bid);
+  if(Array.isArray(courierMovements))replaceRowsForBranch('courierMovements',courierMovements,bid);
+  cloudLoadedScopes.add(scope);
+  saveLocal();
+  if(reason)toast('Historial cargado para '+reason);
+}
+async function ensureDataForView(v){
+  if(!canUseFirebase()) return;
+  if(v==='libro')await cloudLoadDayData(state.selectedHistoryDate||state.activeDate,branchId());
+  if(v==='repartidores'||v==='controlRep')await cloudLoadDayData(state.selectedCourierDate||state.activeDate,branchId());
+  if(['mayor','capital','facturas','admin'].includes(v)){
+    await cloudLoadHistoricalForBranch(branchId(),v==='facturas'?'facturas':'reportes');
+  }
+}
 async function cloudSaveConfig(){
   if(!canUseFirebase()) return;
   const f=window.FONO_FIREBASE;
@@ -408,6 +511,7 @@ async function cloudLoadConfig(){
     ensureBaseProductsPresent();
     await cloudSaveConfig();
   }
+  cloudConfigLoaded=true;
 }
 async function cloudSaveInventoryRow(row){
   if(!canUseFirebase() || !row) return;
@@ -809,6 +913,7 @@ async function login(){
   state.currentUser=u;
   state.selectedBranchId=u.role==='dueno'?'all':u.branchId;
   state.selectedHistoryDate=state.activeDate;state.selectedCourierDate=state.activeDate;state.selectedMonth=monthKey(state.activeDate);
+  state.dashboardPeriod='dia';
   setSelectedCourier((couriers()[0]||{}).id||'');
   setTurnOpen(getTurnOpen());
   document.getElementById('loginRoot').classList.add('hidden');
@@ -820,15 +925,41 @@ function logout(){
   saveLocal();state.currentUser=null;document.getElementById('appRoot').classList.add('hidden');document.getElementById('loginRoot').classList.remove('hidden');document.getElementById('loginPass').value='';initLogin();
 }
 
-function setView(v){state.view=v;render()}
-function setActiveDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.selectedCourierDate=v;state.selectedMonth=monthKey(v);saveLocal();render()}
+async function setView(v){state.view=v;await ensureDataForView(v);render()}
+async function setOwnerBranch(v){state.selectedBranchId=v;setTurnOpen(getTurnOpen());setSelectedCourier((couriers()[0]||{}).id||'');await cloudLoadInventoryForBranch(branchId());await cloudLoadDayData(state.activeDate,branchId());saveLocal();render()}
+async function setActiveDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.selectedCourierDate=v;state.selectedMonth=monthKey(v);await cloudLoadDayData(v,branchId());saveLocal();render()}
 function setMonth(v){state.selectedMonth=v;saveLocal();render()}
-function setDashboardPeriod(v){state.dashboardPeriod=v;saveLocal();renderDashboard()}
-function setDashboardDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.selectedCourierDate=v;state.selectedMonth=monthKey(v);saveLocal();render()}
+async function setDashboardPeriod(v){state.dashboardPeriod=v;if(v!=='dia')await cloudLoadHistoricalForBranch(branchId(),v==='mes'?'dashboard mensual':v==='rango'?'dashboard rango':'dashboard semanal');saveLocal();renderDashboard()}
+async function setDashboardDate(v){state.activeDate=v;state.selectedHistoryDate=v;state.selectedCourierDate=v;state.selectedMonth=monthKey(v);await cloudLoadDayData(v,branchId());saveLocal();render()}
+function rowVisualTime(row){
+  if(Number(row?.createdAt)>0)return Number(row.createdAt);
+  const d=parseDMY(row?.date||state.activeDate);
+  const m=String(row?.time||'').match(/(\d{1,2}):(\d{2})/);
+  if(m)d.setHours(Number(m[1]||0),Number(m[2]||0),0,0);
+  return d.getTime()||0;
+}
+function sortRowsNewest(rows){
+  return (rows||[]).slice().sort((a,b)=>rowVisualTime(b)-rowVisualTime(a)||String(b.id||'').localeCompare(String(a.id||'')));
+}
+function dashboardCustomStart(){return state.dashboardStartDate||state.activeDate}
+function dashboardCustomEnd(){return state.dashboardEndDate||state.activeDate}
+async function setDashboardRangeField(field,value){
+  if(field==='start')state.dashboardStartDate=value||state.activeDate;
+  if(field==='end')state.dashboardEndDate=value||state.activeDate;
+  state.dashboardPeriod='rango';
+  await cloudLoadHistoricalForBranch(branchId(),'dashboard rango');
+  saveLocal();
+  renderDashboard();
+}
 function dashboardRange(){
-  const end=parseDMY(state.activeDate),start=new Date(end);
+  let end=parseDMY(state.activeDate),start=new Date(end);
   if(state.dashboardPeriod==='semana')start.setDate(end.getDate()-6);
   else if(state.dashboardPeriod==='mes')start.setDate(1);
+  else if(state.dashboardPeriod==='rango'){
+    start=parseDMY(dashboardCustomStart());
+    end=parseDMY(dashboardCustomEnd());
+    if(start>end){const tmp=start;start=end;end=tmp}
+  }
   return {start,end};
 }
 function inDashboardRange(date){
@@ -853,6 +984,46 @@ function renderSalesFlowChart(){
   return `<div class="card" style="margin-top:14px"><h3>Gráfico flujo de ventas</h3><div class="muted small" style="margin-bottom:10px">Desde ${rows[0]?.date||state.activeDate} hasta ${rows[rows.length-1]?.date||state.activeDate}</div><div style="overflow:auto;padding-bottom:4px"><div style="display:flex;align-items:flex-end;gap:8px;height:230px;min-width:${Math.max(360,rows.length*52)}px;border-left:1px solid var(--border);border-bottom:1px solid var(--border);padding:10px 8px 0">${rows.map(r=>{const h=Math.max(4,Math.round(Number(r.sales||0)/max*180));return `<div style="width:44px;text-align:center"><div class="small bold">${r.sales?clp(r.sales):''}</div><div title="${r.date} · ${clp(r.sales)} · ${r.orders} pedidos" style="height:${h}px;background:var(--orange);border-radius:8px 8px 0 0"></div><div class="small muted">${r.label}</div><div class="small">${r.orders}</div></div>`}).join('')}</div></div></div>`;
 }
 function topProducts(list,limit=10){const m={};list.forEach(s=>(s.items||[]).forEach(i=>{if(!m[i.name])m[i.name]={name:i.name,qty:0,total:0};m[i.name].qty+=Number(i.qty||0);m[i.name].total+=Number(i.salePrice||0)*Number(i.qty||0)}));return Object.values(m).sort((a,b)=>b.qty-a.qty||b.total-a.total).slice(0,limit)}
+function saleHour(s){
+  const m=String(s?.time||'').match(/(\d{1,2}):(\d{2})/);
+  if(m)return Math.max(0,Math.min(23,Number(m[1]||0)));
+  if(Number(s?.createdAt)>0)return new Date(Number(s.createdAt)).getHours();
+  return 0;
+}
+function dashboardHourData(){
+  const rows=Array.from({length:24},(_,h)=>({label:String(h).padStart(2,'0')+':00',sales:0,orders:0}));
+  dashboardSales().forEach(s=>{const h=saleHour(s);rows[h].sales+=Number(s.total||0);rows[h].orders+=1});
+  return rows;
+}
+function chartPath(rows,valueKey,w,h,pad){
+  const max=Math.max(1,...rows.map(r=>Number(r[valueKey]||0)));
+  if(rows.length===1){
+    const y=h-pad-(Number(rows[0][valueKey]||0)/max)*(h-pad*2);
+    return {path:`M ${pad} ${y} L ${w-pad} ${y}`,max};
+  }
+  const pts=rows.map((r,i)=>{
+    const x=pad+(i/(rows.length-1))*(w-pad*2);
+    const y=h-pad-(Number(r[valueKey]||0)/max)*(h-pad*2);
+    return `${x.toFixed(1)} ${y.toFixed(1)}`;
+  });
+  return {path:'M '+pts.join(' L '),max};
+}
+function renderLineChart(title,rows,valueKey='sales',sub=''){
+  const w=Math.max(520,rows.length*42),h=230,pad=30,data=chartPath(rows,valueKey,w,h,pad);
+  const ticks=rows.map((r,i)=>i%Math.ceil(rows.length/8||1)===0?`<text x="${(pad+(rows.length===1?0:i/(rows.length-1))*(w-pad*2)).toFixed(1)}" y="${h-8}" font-size="11" text-anchor="middle" fill="#64748b">${r.label}</text>`:'').join('');
+  const points=rows.map((r,i)=>{const x=rows.length===1?w/2:pad+(i/(rows.length-1))*(w-pad*2),y=h-pad-(Number(r[valueKey]||0)/Math.max(1,data.max))*(h-pad*2);return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="var(--orange)"><title>${r.label}: ${clp(r[valueKey]||0)} - ${r.orders||0} pedidos</title></circle>`}).join('');
+  return `<div class="card"><h3>${title}</h3>${sub?`<div class="muted small" style="margin-bottom:8px">${sub}</div>`:''}<div style="overflow:auto"><svg width="${w}" height="${h}" role="img" style="min-width:${w}px;background:#fff"><line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#e5e7eb"/><line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="#e5e7eb"/><path d="${data.path}" fill="none" stroke="var(--orange)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>${points}${ticks}</svg></div></div>`;
+}
+function renderTopProductsBars(rows){
+  const max=Math.max(1,...rows.map(r=>Number(r.qty||0)));
+  return `<div class="card"><h3>Ranking productos</h3><div class="list">${rows.map((x,i)=>`<div class="item"><div class="between"><span><b>${i+1}. ${x.name}</b><div class="muted small">${x.qty} unidades - ${clp(x.total)}</div></span><b>${x.qty}</b></div><div style="height:10px;background:#f1f5f9;border-radius:999px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${Math.max(4,Math.round(Number(x.qty||0)/max*100))}%;background:var(--orange)"></div></div></div>`).join('')||'<div class="muted">Sin productos.</div>'}</div></div>`;
+}
+function renderBranchComparison(){
+  const branches=branchId()==='all'?state.branches:state.branches.filter(b=>b.id===branchId());
+  const rows=branches.map(b=>{const s=summary(dashboardSales().filter(x=>x.branchId===b.id));return {name:b.name,sales:s.sales,orders:s.orders}});
+  const max=Math.max(1,...rows.map(r=>Number(r.sales||0)));
+  return `<div class="card"><h3>Comportamiento por sucursal</h3><div class="muted small" style="margin-bottom:8px">${branchId()==='all'?'Comparando todas las sucursales':'Vista de la sucursal activa'}</div>${rows.map(r=>`<div class="item"><div class="between"><span><b>${r.name}</b><div class="muted small">${r.orders} pedidos</div></span><b>${clp(r.sales)}</b></div><div style="height:10px;background:#f1f5f9;border-radius:999px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${Math.max(4,Math.round(Number(r.sales||0)/max*100))}%;background:#16a34a"></div></div></div>`).join('')}</div>`;
+}
 
 function render(){
   if(!state.currentUser)return;
@@ -886,6 +1057,22 @@ function renderDashboard(){
   ${canSeeFinancial()?`<div class="card"><h3>Costo vendido</h3><div class="stat">${clp(sm.cost)}</div></div><div class="card"><h3>Ganancia</h3><div class="stat">${clp(profit)}</div></div><div class="card"><h3>Margen</h3><div class="stat">${percent(profit,sm.sales)}%</div></div><div class="card"><h3>Inventario valorizado</h3><div class="stat">${clp(inventoryValue())}</div></div><div class="card"><h3>Capital pendiente</h3><div class="stat">${clp(pendingCapitalForMonth())}</div></div>`:''}</div>
   ${renderSalesFlowChart()}
   <div class="grid2" style="margin-top:14px"><div class="card"><h3>Top 10 productos más vendidos</h3><div class="list">${top.map((x,i)=>`<div class="item between"><span><b>${i+1}. ${x.name}</b><div class="muted small">${x.qty} unidades</div></span><b>${clp(x.total)}</b></div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Medios de pago</h3><div class="item between"><span>Efectivo</span><b>${clp(pay.efectivo)} · ${percent(pay.efectivo,totalPay)}%</b></div><div class="item between"><span>Transferencia</span><b>${clp(pay.transferencia)} · ${percent(pay.transferencia,totalPay)}%</b></div><div class="item between"><span>Transbank</span><b>${clp(pay.transbank)} · ${percent(pay.transbank,totalPay)}%</b></div></div></div>`;
+}
+
+renderDashboard=function(){
+  const list=dashboardSales(),sm=summary(list),pay=periodPayments(list),totalPay=pay.efectivo+pay.transferencia+pay.transbank,top=topProducts(list,10);
+  const low=state.inventory.filter(r=>(branchId()==='all'||r.branchId===branchId())&&Number(r.min)>0&&Number(r.stock)<=Number(r.min)).map(r=>({...r,p:product(r.productId)}));
+  const fuel=state.dashboardPeriod==='mes'?dashboardClosures().reduce((a,c)=>a+Number(c.fuelExpense||0),0):0,profit=sm.profit-fuel;
+  const range=dashboardRange(),rangeText=`${fmtDMY(range.start)} a ${fmtDMY(range.end)}`;
+  const rangeControls=state.dashboardPeriod==='rango'?`<div class="grid2" style="grid-template-columns:1fr 1fr;margin-top:10px"><div><label>Desde</label><input class="input" value="${dashboardCustomStart()}" onchange="setDashboardRangeField('start',this.value)"></div><div><label>Hasta</label><input class="input" value="${dashboardCustomEnd()}" onchange="setDashboardRangeField('end',this.value)"></div></div>`:'';
+  document.getElementById('view-dashboard').innerHTML=`
+  <div class="card" style="margin-bottom:14px"><h3>Dashboard</h3><div class="row"><button class="btn ${state.dashboardPeriod==='dia'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('dia')">Dia</button><button class="btn ${state.dashboardPeriod==='semana'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('semana')">Semana</button><button class="btn ${state.dashboardPeriod==='mes'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('mes')">Mes</button><button class="btn ${state.dashboardPeriod==='rango'?'btn-primary':'btn-secondary'}" onclick="setDashboardPeriod('rango')">Rango</button><span class="badge">Sucursal: ${branchName()}</span><span class="badge">Periodo: ${rangeText}</span></div><div style="margin-top:12px">${navDate(state.activeDate,'setDashboardDate')}</div>${rangeControls}</div>
+  ${low.length&&!isOperator()?`<div class="card danger-card" style="margin-bottom:14px"><h3>Stock critico</h3><div class="list">${low.map(x=>`<div class="item between"><span>${x.p?.name||x.productId}</span><b class="red">${x.stock} / min ${x.min}</b></div>`).join('')}</div></div>`:''}
+  <div class="grid3"><div class="card"><h3>Ventas</h3><div class="stat">${clp(sm.sales)}</div></div><div class="card"><h3>Pedidos</h3><div class="stat">${sm.orders}</div></div><div class="card"><h3>Ticket promedio</h3><div class="stat">${clp(sm.orders?Math.round(sm.sales/sm.orders):0)}</div></div>
+  ${canSeeFinancial()?`<div class="card"><h3>Costo vendido</h3><div class="stat">${clp(sm.cost)}</div></div><div class="card"><h3>Ganancia</h3><div class="stat">${clp(profit)}</div></div><div class="card"><h3>Margen</h3><div class="stat">${percent(profit,sm.sales)}%</div></div><div class="card"><h3>Inventario valorizado</h3><div class="stat">${clp(inventoryValue())}</div></div><div class="card"><h3>Capital pendiente</h3><div class="stat">${clp(pendingCapitalForMonth())}</div></div>`:''}</div>
+  <div class="grid2" style="margin-top:14px">${renderLineChart('Ventas por dia',dashboardFlowData(),'sales',rangeText)}${renderLineChart('Ventas por horario',dashboardHourData(),'sales','Agrupado por hora del dia')}</div>
+  <div class="grid2" style="margin-top:14px">${renderTopProductsBars(top)}${renderBranchComparison()}</div>
+  <div class="grid2" style="margin-top:14px"><div class="card"><h3>Top 10 productos mas vendidos</h3><div class="list">${top.map((x,i)=>`<div class="item between"><span><b>${i+1}. ${x.name}</b><div class="muted small">${x.qty} unidades</div></span><b>${clp(x.total)}</b></div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Medios de pago</h3><div class="item between"><span>Efectivo</span><b>${clp(pay.efectivo)} - ${percent(pay.efectivo,totalPay)}%</b></div><div class="item between"><span>Transferencia</span><b>${clp(pay.transferencia)} - ${percent(pay.transferencia,totalPay)}%</b></div><div class="item between"><span>Transbank</span><b>${clp(pay.transbank)} - ${percent(pay.transbank,totalPay)}%</b></div></div></div>`;
 }
 
 function activeProducts(){return state.products.filter(p=>p.active!==false&&(!p.availableBranches||p.availableBranches.includes(branchId())||branchId()==='all'))}
@@ -1011,13 +1198,13 @@ function saveSale(){
 }
 
 function renderLibro(){
-  const all=daySales(state.selectedHistoryDate);
+  const all=sortRowsNewest(daySales(state.selectedHistoryDate));
   const reps=[...new Map(all.map(s=>[s.courierId,s.courierName||s.courierId])).entries()];
   const current=reps.some(([id])=>id===state.selectedLibroCourierId)?state.selectedLibroCourierId:'';
-  const list=current?all.filter(s=>s.courierId===current):all;
+  const list=sortRowsNewest(current?all.filter(s=>s.courierId===current):all);
   document.getElementById('view-libro').innerHTML=`<div class="grid2"><div class="card"><h3>Libro diario</h3>${navDate(state.selectedHistoryDate,'setLibroDate')}<div class="grid2" style="grid-template-columns:1fr 1fr;margin-bottom:10px"><div><label>Filtrar repartidor</label><select class="input" onchange="state.selectedLibroCourierId=this.value;saveLocal();renderLibro()"><option value="">Todos</option>${reps.map(([id,name])=>`<option value="${id}" ${current===id?'selected':''}>${name}</option>`).join('')}</select></div><div class="item between" style="margin:0"><span>Total filtrado</span><b>${clp(summary(list).sales)}</b></div></div><div class="list" style="margin-top:10px">${list.map(s=>`<div class="item between"><div><b>${s.time}</b><div class="muted small">${s.date} · ${s.courierName}</div><div class="small"><b>Pago:</b> ${paymentText(s)}</div><div>${s.items.map(i=>i.qty+'x '+i.name).join(' · ')}</div></div><b>${clp(s.total)}</b>${canEditDailyOrders()?`<div class="row"><button class="btn btn-secondary" onclick="editSale('${s.id}')">Editar</button><button class="btn btn-danger" onclick="deleteSale('${s.id}')">Borrar</button></div>`:''}</div>`).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Productos vendidos</h3>${productsSoldList(list)}</div></div>`
 }
-function setLibroDate(v){state.selectedHistoryDate=v;state.selectedLibroCourierId='';saveLocal();renderLibro()}
+async function setLibroDate(v){state.selectedHistoryDate=v;state.selectedLibroCourierId='';await cloudLoadDayData(v,branchId());saveLocal();renderLibro()}
 function productsSoldList(list){const m={};list.forEach(s=>(s.items||[]).forEach(i=>m[i.name]=(m[i.name]||0)+Number(i.qty||0)));return Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,q])=>`<div class="item between"><span>${n}</span><b>${q}</b></div>`).join('')||'<div class="muted">Sin productos.</div>'}
 function editSale(id){
   if(!canEditDailyOrders())return alert('Sin permiso');
@@ -1086,7 +1273,7 @@ async function setMonthlyExpense(kind,idx,value){
     alert('No se pudo guardar gasto mensual en Firebase');
   }
 }
-function setMonthNav(v){state.selectedMonth=v;render()}
+async function setMonthNav(v){state.selectedMonth=v;await cloudLoadHistoricalForBranch(branchId(),'mes');render()}
 
 function renderCapital(){
   const list=monthSales(),sm=summary(list),pay=periodPayments(list);
@@ -1117,7 +1304,7 @@ function renderRepartidores(){
   const list=daySales(state.selectedCourierDate),reps=[...new Set(list.map(s=>s.courierId))].map(id=>state.couriers.find(c=>c.id===id)).filter(Boolean),tot=summary(list);
   document.getElementById('view-repartidores').innerHTML=`<div class="grid2"><div class="card"><h3>Repartidores</h3>${navDate(state.selectedCourierDate,'setRepDate')}<div class="grid3">${reps.map(r=>{const arr=list.filter(s=>s.courierId===r.id),sm=summary(arr);return `<div class="card"><h3>${r.name}</h3><div class="badge">${sm.orders} pedidos</div><div class="item between"><span>Efectivo</span><b>${clp(sm.ef)}</b></div><div class="item between"><span>Transfer.</span><b>${clp(sm.tr)}</b></div><div class="item between"><span>Transbank</span><b>${clp(sm.tb)}</b></div><div class="item between"><span>Total</span><b>${clp(sm.sales)}</b></div></div>`}).join('')||'<div class="muted">Sin ventas.</div>'}</div></div><div class="card"><h3>Resumen</h3><div class="item between"><span>Pedidos</span><b>${tot.orders}</b></div><div class="item between"><span>Total vendido</span><b>${clp(tot.sales)}</b></div><div class="item between"><span>Efectivo</span><b>${clp(tot.ef)}</b></div><div class="item between"><span>Transferencia</span><b>${clp(tot.tr)}</b></div><div class="item between"><span>Transbank</span><b>${clp(tot.tb)}</b></div></div></div>`
 }
-function setRepDate(v){state.selectedCourierDate=v;renderRepartidores()}
+async function setRepDate(v){state.selectedCourierDate=v;await cloudLoadDayData(v,branchId());renderRepartidores()}
 
 function addQty(map,pid,qty){if(!pid)return;map[pid]=(map[pid]||0)+Number(qty||0)}
 function productIdForBase(pid){
@@ -1274,7 +1461,7 @@ function renderControlRepartidor(){
   const tabs=`<div class="row" style="margin:10px 0"><input class="input" style="flex:1" placeholder="Buscar producto" value="${state.controlRepQuery||''}" oninput="state.controlRepQuery=this.value;renderControlRepartidor()"></div><div class="tabs">${state.categories.filter(c=>c!=='Reparto').map(cat=>`<button class="tab ${state.controlRepCategory===cat?'active':''}" onclick="state.controlRepCategory='${cat}';state.controlRepQuery='';renderControlRepartidor()">${cat}</button>`).join('')}</div>`;
   document.getElementById('view-controlRep').innerHTML=`<div class="grid2"><div class="card"><h3>Control productos repartidor</h3>${navDate(date,'setControlRepDate')}<label>Repartidor</label><select class="input" onchange="state.controlRepCourierId=this.value;saveLocal();renderControlRepartidor()">${cList.map(c=>`<option value="${c.id}" ${cid===c.id?'selected':''}>${c.name}</option>`).join('')}</select>${edit?`<div style="margin-top:10px"><button class="btn btn-primary" onclick="applyCourierBaseLoad()" ${baseLoadApplied(date,cid)?'disabled':''}>Aplicar carga base</button></div><label style="margin-top:12px">Producto</label>${tabs}<select id="crProd" class="input">${prods.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select><div class="grid3" style="margin-top:10px"><input id="crQty" class="input" type="number" value="1"><button class="btn btn-secondary" onclick="saveCourierMovement('load')">Cargar extra</button><button class="btn btn-primary" onclick="saveCourierMovement('return')">Registrar devoluci?n</button></div><div class="grid3" style="margin-top:10px">${prods.map(p=>`<div class="prod" onclick="selectControlRepProduct('${p.id}')"><div><b>${p.name}</b><div class="badge">${p.category}</div></div><div class="price">Elegir</div></div>`).join('')||'<div class="muted">Sin productos.</div>'}</div>`:'<div class="muted" style="margin-top:10px">Vista solo lectura.</div>'}</div><div class="card"><h3>Cuadre del repartidor</h3><div class="item between"><span>Diferencia valorizada faltante</span><b class="${missingValue?'red':'green'}">${clp(missingValue)}</b></div><table class="table"><thead><tr><th align="left">Producto</th><th align="right">Entregado</th><th align="right">Vendido</th><th align="right">Debe devolver</th><th align="right">Devuelto</th><th align="right">Dif.</th></tr></thead><tbody>${summaryRows.map(r=>`<tr><td>${product(r.productId)?.name||r.productId}</td><td align="right">${r.delivered}</td><td align="right">${r.sold}</td><td align="right">${r.expected}</td><td align="right">${r.returned}</td><td align="right" class="${r.diff<0?'red':r.diff>0?'green':''}">${r.diff}</td></tr>`).join('')}</tbody></table></div></div>`
 }
-function setControlRepDate(v){state.selectedCourierDate=v;saveLocal();renderControlRepartidor()}
+async function setControlRepDate(v){state.selectedCourierDate=v;await cloudLoadDayData(v,branchId());saveLocal();renderControlRepartidor()}
 
 function movementWarehouseDelta(m,mult=1){
   const deltas={};
@@ -1372,7 +1559,7 @@ renderInventario=function(){
 }
 
 function renderFacturas(){
-  const invs=monthInvoices();
+  const invs=sortRowsNewest(monthInvoices());
   const draftTotal=state.invoiceDraft.reduce((a,i)=>a+Number(i.qty||0)*Number(i.cost||0),0);
   const currentType=invoiceTypeValue(state.invoiceType);
   const capitalTotal=invs.filter(f=>invoiceTypeValue(f.type)==='capitalInicial').reduce((a,f)=>a+Number(f.total||0),0);
@@ -1835,25 +2022,14 @@ cloudLoadAll=async function(){
     return;
   }
   try{
-    await cloudLoadConfig();
+    if(!cloudConfigLoaded)await cloudLoadConfig();
     seedInventory();
-    await cloudLoadInventory();
-    const [sales,invoices,closures,capitalResets,monthlyExpenses,courierMovements]=await Promise.all([
-      cloudLoadCollection('sales'),
-      cloudLoadCollection('invoices'),
-      cloudLoadCollection('closures'),
-      cloudLoadCollection('capitalResets'),
-      cloudLoadCollection('monthlyExpenses'),
-      cloudLoadCollection('courierMovements')
-    ]);
-    state.sales=mergeById(Array.isArray(sales)?sales:[],pendingSales);
-    state.invoices=Array.isArray(invoices)?invoices:[];
-    state.closures=Array.isArray(closures)?closures:[];
-    state.capitalResets=Array.isArray(capitalResets)?capitalResets:[];
-    state.monthlyExpenses=Array.isArray(monthlyExpenses)?monthlyExpenses:[];
-    state.courierMovements=Array.isArray(courierMovements)?courierMovements:[];
+    await cloudLoadInventoryForBranch(branchId());
+    await cloudLoadDayData(state.activeDate,branchId());
+    await cloudLoadCapitalResetsForBranch(branchId());
+    state.sales=mergeById(state.sales||[],pendingSales);
     pendingSales.forEach(s=>{
-      if(!(sales||[]).some(x=>x.id===s.id)){
+      if(!(state.sales||[]).some(x=>x.id===s.id&&x.syncStatus==='synced')){
         try{applyInventoryDeltasLocal(existingSaleWarehouseDeltas(s),s.branchId)}catch(e){console.error('Pendiente local no aplicado',e)}
       }
     });
@@ -1861,7 +2037,7 @@ cloudLoadAll=async function(){
     seedInventory();
     saveLocal();
     await syncPendingSales();
-    toast(pendingSales.length?'Datos cargados y pendientes sincronizados':'Datos cargados desde Firebase');
+    toast(pendingSales.length?'Datos del turno cargados y pendientes sincronizados':'Datos del turno cargados desde Firebase');
   }catch(e){
     console.error('Error cargando Firebase',e);
     toast('Error Firebase. Usando respaldo local.');
@@ -2257,7 +2433,7 @@ function renderAdmin(){const all=summary(state.sales);document.getElementById('v
 function exportCSV(){toast('Exportar Excel se activar? en la versión Firebase/GitHub')}
 
 loadLocal();initLogin();
-window.setDashboardDate=setDashboardDate;window.updateProductPrice=updateProductPrice;window.login=login;window.logout=logout;window.setView=setView;window.setDashboardPeriod=setDashboardPeriod;window.addProductToCart=addProductToCart;window.removeCart=removeCart;window.cancelCart=cancelCart;window.saveSale=saveSale;window.setLibroDate=setLibroDate;window.setRepDate=setRepDate;window.setMonthNav=setMonthNav;window.editSale=editSale;window.deleteSale=deleteSale;window.adjustInventory=adjustInventory;window.addInvoiceItem=addInvoiceItem;window.removeInvoiceItem=removeInvoiceItem;window.cancelInvoiceDraft=cancelInvoiceDraft;window.editInvoice=editInvoice;window.deleteInvoice=deleteInvoice;window.saveInvoice=saveInvoice;window.addCategory=addCategory;window.addProductManual=addProductManual;window.addUser=addUser;window.addCourier=addCourier;window.closeShift=closeShift;window.openNewDay=openNewDay;window.reopenSameDay=reopenSameDay;window.exportCSV=exportCSV;window.cloudBackupAll=cloudBackupAll;
+window.setDashboardDate=setDashboardDate;window.setDashboardRangeField=setDashboardRangeField;window.updateProductPrice=updateProductPrice;window.login=login;window.logout=logout;window.setView=setView;window.setDashboardPeriod=setDashboardPeriod;window.addProductToCart=addProductToCart;window.removeCart=removeCart;window.cancelCart=cancelCart;window.saveSale=saveSale;window.setLibroDate=setLibroDate;window.setRepDate=setRepDate;window.setMonthNav=setMonthNav;window.editSale=editSale;window.deleteSale=deleteSale;window.adjustInventory=adjustInventory;window.addInvoiceItem=addInvoiceItem;window.removeInvoiceItem=removeInvoiceItem;window.cancelInvoiceDraft=cancelInvoiceDraft;window.editInvoice=editInvoice;window.deleteInvoice=deleteInvoice;window.saveInvoice=saveInvoice;window.addCategory=addCategory;window.addProductManual=addProductManual;window.addUser=addUser;window.addCourier=addCourier;window.closeShift=closeShift;window.openNewDay=openNewDay;window.reopenSameDay=reopenSameDay;window.exportCSV=exportCSV;window.cloudBackupAll=cloudBackupAll;
 window.selectInvoiceProduct=selectInvoiceProduct;
 window.deleteCourier=deleteCourier;
 window.resetInventoryAndCapital=resetInventoryAndCapital;
