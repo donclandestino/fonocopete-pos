@@ -123,6 +123,7 @@ console.log('Firebase conectado: POS Fonocopete');
 <script>
 const ZERO_TEST_MODE=false;
 const STORAGE_KEY='fonocopete_clean_app_v91_firebase_produccion';
+const LOCAL_STORAGE_LEGACY_KEYS=['fonocopete_clean_app_v91_firebase_production'];
 const BASE_PRODUCTS=[{id:'beer_silver',name:'Silver',category:'Cervezas',salePrice:7000,type:'simple',active:true,trackStock:true},
     {id:'beer_cristal',name:'Cristal',category:'Cervezas',salePrice:8000,type:'simple',active:true,trackStock:true},
     {id:'beer_royal',name:'Royal',category:'Cervezas',salePrice:9000,type:'simple',active:true,trackStock:true},
@@ -710,10 +711,114 @@ function loadLocal(){
   state.selectedMonth=monthKey(state.activeDate);
   seedInventory();
 }
+function pendingLocalSale(s){return !!(s&&s.syncStatus&&s.syncStatus!=='synced')}
+function sameLocalMonth(date,mk){return monthKey(date||todayDMY())===mk}
+function compactLocalRows(rows,keepDates,keepMonths,opts={}){
+  return (Array.isArray(rows)?rows:[]).filter(r=>{
+    if(opts.keepPending&&pendingLocalSale(r))return true;
+    if(r&&r.syncStatus&&r.syncStatus!=='synced')return true;
+    if(r&&r.localOnly)return true;
+    if(r&&r.date&&keepDates.has(r.date))return true;
+    if(r&&r.date&&keepMonths.has(monthKey(r.date)))return true;
+    return false;
+  });
+}
+function compactLocalState(src=state){
+  const activeDate=src.activeDate||todayDMY();
+  const today=todayDMY();
+  const selectedHistoryDate=src.selectedHistoryDate||activeDate;
+  const selectedCourierDate=src.selectedCourierDate||activeDate;
+  const selectedMonth=src.selectedMonth||monthKey(activeDate);
+  const keepDates=new Set([today,activeDate,selectedHistoryDate,selectedCourierDate].filter(Boolean));
+  const keepMonths=new Set([selectedMonth,monthKey(activeDate),monthKey(today)].filter(Boolean));
+  const compact={
+    currentUser:null,
+    view:src.view||'dashboard',
+    activeDate,
+    selectedHistoryDate,
+    selectedCourierDate,
+    selectedMonth,
+    dashboardPeriod:src.dashboardPeriod||'dia',
+    dashboardStartDate:src.dashboardStartDate||'',
+    dashboardEndDate:src.dashboardEndDate||'',
+    selectedBranchId:src.selectedBranchId||'conce',
+    turnOpen:src.turnOpen!==false,
+    category:src.category||'Piscos',
+    query:src.query||'',
+    invCategory:src.invCategory||'Piscos',
+    invQuery:src.invQuery||'',
+    facCategory:src.facCategory||'Piscos',
+    facQuery:src.facQuery||'',
+    prodCategory:src.prodCategory||'Piscos',
+    prodQuery:src.prodQuery||'',
+    controlRepCategory:src.controlRepCategory||'Piscos',
+    controlRepQuery:src.controlRepQuery||'',
+    controlRepCourierId:src.controlRepCourierId||'',
+    selectedLibroCourierId:src.selectedLibroCourierId||'',
+    cart:Array.isArray(src.cart)?src.cart:[],
+    editSaleId:src.editSaleId||null,
+    invoiceDraft:Array.isArray(src.invoiceDraft)?src.invoiceDraft:[],
+    editInvoiceId:src.editInvoiceId||null,
+    invoiceType:src.invoiceType||'reposicion',
+    paymentMode:src.paymentMode||'efectivo',
+    mixEf:Number(src.mixEf||0),
+    mixTr:Number(src.mixTr||0),
+    mixTb:Number(src.mixTb||0),
+    selectedCourierId:src.selectedCourierId||'',
+    fuelExpense:src.fuelExpense||'',
+    branchTemp:src.branchTemp||{},
+    branches:Array.isArray(src.branches)&&src.branches.length?src.branches:BRANCHES,
+    users:Array.isArray(src.users)&&src.users.length?src.users:BASE_USERS,
+    categories:Array.isArray(src.categories)&&src.categories.length?src.categories:BASE_CATEGORIES,
+    products:normalizeProducts(Array.isArray(src.products)&&src.products.length?src.products:BASE_PRODUCTS),
+    couriers:Array.isArray(src.couriers)?src.couriers:[],
+    inventory:Array.isArray(src.inventory)?src.inventory:[],
+    sales:compactLocalRows(src.sales,keepDates,new Set(),{keepPending:true}),
+    invoices:compactLocalRows(src.invoices,keepDates,keepMonths),
+    closures:compactLocalRows(src.closures,keepDates,keepMonths),
+    capitalResets:Array.isArray(src.capitalResets)?src.capitalResets:[],
+    monthlyExpenses:(Array.isArray(src.monthlyExpenses)?src.monthlyExpenses:[]).filter(r=>!r.month||keepMonths.has(r.month)),
+    courierMovements:compactLocalRows(src.courierMovements,keepDates,new Set())
+  };
+  return compact;
+}
+function emergencyLocalState(){
+  const activeDate=state.activeDate||todayDMY();
+  const keepDates=new Set([activeDate,todayDMY()].filter(Boolean));
+  return {
+    ...compactLocalState({
+      ...state,
+      sales:(state.sales||[]).filter(s=>pendingLocalSale(s)||keepDates.has(s.date)),
+      invoices:(state.invoices||[]).filter(i=>keepDates.has(i.date)),
+      closures:(state.closures||[]).filter(c=>keepDates.has(c.date)),
+      monthlyExpenses:[],
+      courierMovements:(state.courierMovements||[]).filter(m=>keepDates.has(m.date)),
+      capitalResets:[]
+    })
+  };
+}
+function pruneLegacyLocalStorage(){
+  (LOCAL_STORAGE_LEGACY_KEYS||[]).forEach(k=>{
+    if(k&&k!==STORAGE_KEY){
+      try{localStorage.removeItem(k)}catch(e){console.warn('No se pudo limpiar cache local antigua',k,e)}
+    }
+  });
+}
 function saveLocal(){
-  const clean=JSON.parse(JSON.stringify(state));
-  clean.currentUser=null;
-  localStorage.setItem(STORAGE_KEY,JSON.stringify(clean));
+  try{
+    pruneLegacyLocalStorage();
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(compactLocalState(state)));
+  }catch(e){
+    console.error('localStorage lleno. Guardando respaldo minimo.',e);
+    try{
+      pruneLegacyLocalStorage();
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(emergencyLocalState()));
+      toast('Respaldo local reducido por espacio. Firebase sigue como fuente principal.');
+    }catch(e2){
+      console.error('No se pudo guardar respaldo local minimo.',e2);
+      toast('Sin espacio para respaldo local. Firebase sigue guardando.');
+    }
+  }
 }
 
 function uid(){return Math.random().toString(36).slice(2,10)}
