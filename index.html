@@ -123,7 +123,13 @@ console.log('Firebase conectado: POS Fonocopete');
 <script>
 const ZERO_TEST_MODE=false;
 const STORAGE_KEY='fonocopete_clean_app_v91_firebase_produccion';
-const LOCAL_STORAGE_LEGACY_KEYS=['fonocopete_clean_app_v91_firebase_production'];
+const LOCAL_STORAGE_LEGACY_KEYS=[
+  'fonocopete_clean_app_v91_firebase',
+  'fonocopete_clean_app_v91_firebase_production',
+  'fonocopete_clean_app_v91_finanzas_caja_cero',
+  'fonocopete_clean_app_v91_mejoras_cero'
+];
+const LOCAL_STORAGE_LEGACY_PREFIXES=['fonocopete_clean_app_v91_'];
 const BASE_PRODUCTS=[{id:'beer_silver',name:'Silver',category:'Cervezas',salePrice:7000,type:'simple',active:true,trackStock:true},
     {id:'beer_cristal',name:'Cristal',category:'Cervezas',salePrice:8000,type:'simple',active:true,trackStock:true},
     {id:'beer_royal',name:'Royal',category:'Cervezas',salePrice:9000,type:'simple',active:true,trackStock:true},
@@ -732,6 +738,8 @@ function compactLocalState(src=state){
   const keepDates=new Set([today,activeDate,selectedHistoryDate,selectedCourierDate].filter(Boolean));
   const keepMonths=new Set([selectedMonth,monthKey(activeDate),monthKey(today)].filter(Boolean));
   const compact={
+    _localBackupVersion:'compact-v2',
+    _savedAt:Date.now(),
     currentUser:null,
     view:src.view||'dashboard',
     activeDate,
@@ -798,7 +806,16 @@ function emergencyLocalState(){
   };
 }
 function pruneLegacyLocalStorage(){
-  (LOCAL_STORAGE_LEGACY_KEYS||[]).forEach(k=>{
+  const keys=new Set(LOCAL_STORAGE_LEGACY_KEYS||[]);
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(k&&(LOCAL_STORAGE_LEGACY_PREFIXES||[]).some(prefix=>k.startsWith(prefix)))keys.add(k);
+    }
+  }catch(e){
+    console.warn('No se pudo revisar cache local antigua',e);
+  }
+  keys.forEach(k=>{
     if(k&&k!==STORAGE_KEY){
       try{localStorage.removeItem(k)}catch(e){console.warn('No se pudo limpiar cache local antigua',k,e)}
     }
@@ -807,16 +824,21 @@ function pruneLegacyLocalStorage(){
 function saveLocal(){
   try{
     pruneLegacyLocalStorage();
-    localStorage.setItem(STORAGE_KEY,JSON.stringify(compactLocalState(state)));
+    const compactJson=JSON.stringify(compactLocalState(state));
+    localStorage.setItem(STORAGE_KEY,compactJson);
+    return true;
   }catch(e){
     console.error('localStorage lleno. Guardando respaldo minimo.',e);
     try{
       pruneLegacyLocalStorage();
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(emergencyLocalState()));
+      const emergencyJson=JSON.stringify(emergencyLocalState());
+      localStorage.setItem(STORAGE_KEY,emergencyJson);
       toast('Respaldo local reducido por espacio. Firebase sigue como fuente principal.');
+      return true;
     }catch(e2){
       console.error('No se pudo guardar respaldo local minimo.',e2);
       toast('Sin espacio para respaldo local. Firebase sigue guardando.');
+      return false;
     }
   }
 }
